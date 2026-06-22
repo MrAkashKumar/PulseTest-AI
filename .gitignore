@@ -1,0 +1,89 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Next.js Build Outputs
+/.next/
+/out/
+
+# Production and Local Build Cache
+.vercel
+/.turbo
+
+# Environment Variables (CRITICAL: Never commit these!)
+.env
+.env.local
+.env.production
+.env.production.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.*.local
+
+# Supabase Local Development
+.supabase/
+/supabase/.branches/
+/supabase/.temp/
+/supabase/functions/.env
+
+# Testing
+/coverage
+/.nyc_output
+
+# IDEs, Editors, and OS Files
+.DS_Store
+*.pem
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Next.js Build Outputs
+/.next/
+/out/
+
+# Production and Local Build Cache
+.vercel
+/.turbo
+
+# Environment Variables (CRITICAL: Never commit these!)
+.env
+.env.local
+.env.production
+.env.production.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.*.local
+
+# Supabase Local Development
+.supabase/
+/supabase/.branches/
+/supabase/.temp/
+/supabase/functions/.env
+
+# Testing
+/coverage
+/.nyc_output
+
+# IDEs, Editors, and OS Files
+.DS_Store
+*.pem
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store

@@ -1,0 +1,19 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { getPreferences, getTodayUsage, loadSessionKey, savePreferences, saveSessionKey } from "@/lib/client-store";
+
+export default function SettingsPanel({ onClose, onSaved }) {
+  const [key, setKey] = useState(loadSessionKey()); const [show, setShow] = useState(false); const [health, setHealth] = useState(null);
+  const [preferences, setPreferences] = useState(getPreferences()); const usage = getTodayUsage();
+  useEffect(() => { fetch("/api/health").then((response) => response.json()).then(setHealth).catch(() => {}); }, []);
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="modal settings-v2"><div className="modal-head"><div><span className="overline">CONTROL ROOM</span><h2>API & generation limits</h2></div><button className="icon-button" onClick={onClose} aria-label="Close settings">×</button></div>
+    <div className="key-illustration"><span>⌁</span><div><b>Bring your own OpenAI key</b><p>The key is kept only in this browser tab and sent to same-origin server routes. It is never saved with questions, reports or Supabase records.</p></div></div>
+    <label className="field-label" htmlFor="api-key-v2">OpenAI API key</label><div className="key-input"><input id="api-key-v2" type={show ? "text" : "password"} value={key} onChange={(event) => setKey(event.target.value)} placeholder="sk-…" autoComplete="off" /><button onClick={() => setShow(!show)}>{show ? "Hide" : "Show"}</button></div><p className="field-help">Leave blank to use <code>OPENAI_API_KEY</code> from the deployed server. Deep Search uses the Responses API web-search tool—no separate Google key is required.</p>
+    <div className="settings-grid"><label><span>Daily question ceiling</span><select value={preferences.dailyQuestionLimit} onChange={(event) => setPreferences({ ...preferences, dailyQuestionLimit: Number(event.target.value) })}><option value="50">50 questions</option><option value="180">180 questions</option><option value="360">360 questions</option><option value="720">720 questions</option></select><small>Local cost guard; resets each day.</small></label><label><span>Deep searches per day</span><select value={preferences.dailyResearchLimit} onChange={(event) => setPreferences({ ...preferences, dailyResearchLimit: Number(event.target.value) })}><option value="1">1 search</option><option value="3">3 searches</option><option value="5">5 searches</option><option value="10">10 searches</option></select><small>Includes related-question research.</small></label></div>
+    <label className="adaptive-setting"><input type="checkbox" checked={preferences.adaptiveMode} onChange={(event) => setPreferences({ ...preferences, adaptiveMode: event.target.checked })} /><span><b>Adaptive learning by default</b><small>Uses only your generated-question history to choose focus and difficulty.</small></span></label>
+    <div className="usage-meter"><div><span>TODAY’S LOCAL LIMIT</span><b>{usage.questions}/{preferences.dailyQuestionLimit} questions · {usage.research}/{preferences.dailyResearchLimit} searches</b></div><i><b style={{ width: `${Math.min(100, usage.questions / preferences.dailyQuestionLimit * 100)}%` }} /></i></div>
+    <div className="connection-status"><span className={health?.openaiConfigured ? "online" : ""}><i /> Server key {health?.openaiConfigured ? "configured" : "not configured"}</span><span className={health?.supabaseConfigured ? "online" : ""}><i /> Storage: {health?.supabaseConfigured ? "Supabase" : "private device"}</span></div>
+    <div className="modal-actions"><button className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" onClick={() => { saveSessionKey(key); savePreferences(preferences); onSaved(); }}>Save controls</button></div>
+  </div></div>;
+}
