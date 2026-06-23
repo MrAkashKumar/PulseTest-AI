@@ -1,15 +1,17 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { SUBJECTS, allocateSubjects, buildBatchPlan } from "@/lib/constants";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SUBJECTS, allocateSubjects } from "@/lib/constants";
 import { demoExam } from "@/lib/demo-exam";
-import { deleteExam, getPreferences, getProfile, getTodayUsage, loadExams, loadQuestionArchive, loadQuestionMemory, loadResearch, loadSessionKey, recordUsage, saveExam, saveProfile, saveResearch } from "@/lib/client-store";
-import { adaptivePromptFromExams, funTestName } from "@/lib/analytics";
+import { deleteExam, deleteSchedule, getPreferences, getProfile, loadExams, loadQuestionArchive, loadQuestionMemory, loadResearch, loadSchedules, saveExam, saveProfile, saveResearch, saveSchedules } from "@/lib/client-store";
+import { certificateForResult } from "@/lib/certification";
+import { buildTimingMeta } from "@/lib/exam-timing";
+import { generateExamDraft } from "@/lib/generation-client";
 
 const navItems = [
   ["dashboard", "grid", "Dashboard"], ["generator", "spark", "Question generator"],
-  ["library", "book", "My test library"], ["history", "layers", "Question history"], ["progress", "chart", "Progress report"], ["research", "radar", "Research signals"], ["tutor", "message", "AI tutor"]
+  ["scheduler", "calendar", "Scheduler"], ["library", "book", "My test library"], ["history", "layers", "Question history"], ["progress", "chart", "Progress report"], ["research", "radar", "Research signals"], ["tutor", "message", "AI tutor"]
 ];
 
 const iconPaths = {
@@ -30,6 +32,7 @@ const iconPaths = {
   brain: ["M9.5 4.5A3 3 0 006.6 8a3 3 0 00-1 5.7A3.5 3.5 0 009 19.9c.7 0 1.4-.2 2-.6V5.8a3 3 0 00-1.5-1.3z", "M14.5 4.5A3 3 0 0117.4 8a3 3 0 011 5.7 3.5 3.5 0 01-3.4 6.2c-.7 0-1.4-.2-2-.6V5.8a3 3 0 011.5-1.3z", "M8 10h3", "M13 14h3"],
   chart: ["M4 20V10", "M10 20V4", "M16 20v-7", "M22 20H2"],
   layers: ["M12 3l8 4-8 4-8-4 8-4z", "M4 12l8 4 8-4", "M4 17l8 4 8-4"],
+  calendar: ["M7 3v4", "M17 3v4", "M4 8h16", "M5 5h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z"],
   menu: ["M4 7h16", "M4 12h16", "M4 17h16"],
   message: ["M21 15a2 2 0 01-2 2H8l-5 4V5a2 2 0 012-2h14a2 2 0 012 2z", "M8 9h8", "M8 13h5"]
 };
@@ -40,6 +43,7 @@ const ResearchSurface = dynamic(() => import("./ResearchIntelligence"), { loadin
 const SettingsSurface = dynamic(() => import("./SettingsPanel"), { loading: () => <SurfaceLoader title="Loading settings…" detail="Preparing keys, runtime config and limits." /> });
 const AITutor = dynamic(() => import("./AITutor"), { loading: () => <SurfaceLoader title="Opening AI tutor…" detail="Getting the in-app explanation workspace ready." /> });
 const QuestionHistory = dynamic(() => import("./QuestionHistory"), { loading: () => <SurfaceLoader title="Loading question history…" detail="Preparing your generated question bank and subject-mix view." /> });
+const SchedulerLab = dynamic(() => import("./SchedulerLab"), { loading: () => <SurfaceLoader title="Loading scheduler…" detail="Preparing countdowns and scheduled paper generation." /> });
 
 function Icon({ name, size = 18 }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{(iconPaths[name] || []).map((d, i) => <path d={d} key={i} />)}</svg>;
@@ -69,6 +73,7 @@ export default function PulseTestApplication() {
   const [profile, setProfile] = useState({ name: "Doctor", streak: 0 });
   const [questionMemory, setQuestionMemory] = useState([]);
   const [questionArchive, setQuestionArchive] = useState([]);
+  const [schedules, setSchedules] = useState([]);
   const [currentExam, setCurrentExam] = useState(null);
   const [research, setResearchState] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -79,6 +84,7 @@ export default function PulseTestApplication() {
   const [tutorDraft, setTutorDraft] = useState(null);
   const [toast, setToast] = useState("");
   const searchInputRef = useRef(null);
+  const activeScheduleIds = useRef(new Set());
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -86,6 +92,7 @@ export default function PulseTestApplication() {
       setProfile(getProfile());
       setQuestionMemory(loadQuestionMemory());
       setQuestionArchive(loadQuestionArchive());
+      setSchedules(loadSchedules());
       setResearchState(loadResearch());
     });
     return () => cancelAnimationFrame(frame);
@@ -145,6 +152,74 @@ export default function PulseTestApplication() {
     setQuestionArchive(loadQuestionArchive());
   }
 
+  function persistSchedules(next) {
+    const saved = saveSchedules(next);
+    setSchedules(saved);
+    return saved;
+  }
+
+  const runScheduledPaper = useCallback(async (scheduleId) => {
+    if (activeScheduleIds.current.has(scheduleId)) return;
+    const schedule = loadSchedules().find((item) => item.id === scheduleId);
+    if (!schedule || schedule.status === "generating" || schedule.status === "ready") return;
+    activeScheduleIds.current.add(scheduleId);
+    const commitSchedulePatch = (patcher) => {
+      const next = loadSchedules().map((item) => item.id === scheduleId ? { ...item, ...(typeof patcher === "function" ? patcher(item) : patcher) } : item);
+      const saved = saveSchedules(next);
+      setSchedules(saved);
+      return saved.find((item) => item.id === scheduleId);
+    };
+    const generationStartedAt = new Date().toISOString();
+    commitSchedulePatch({ status: "generating", generationStartedAt, generationFinishedAt: null, error: "", progress: { done: 0, total: schedule.count, label: "Starting generation" } });
+    try {
+      const exam = await generateExamDraft({
+        ...schedule,
+        exams: loadExams(),
+        research: loadResearch(),
+        questionMemory: loadQuestionMemory(),
+        title: `Scheduled: ${schedule.title}`,
+        schedule: { id: schedule.id, scheduledAt: schedule.scheduledAt, prepStartsAt: schedule.prepStartsAt, reminderMinutes: schedule.reminderMinutes },
+        onResearch: (value) => { setResearchState(value); saveResearch(value); },
+        onProgress: (progress) => commitSchedulePatch({ progress })
+      });
+      const nextExams = await saveExam(exam);
+      setExams(nextExams);
+      setQuestionMemory(loadQuestionMemory());
+      setQuestionArchive(loadQuestionArchive());
+      commitSchedulePatch({ status: "ready", generatedExamId: exam.id, generationFinishedAt: new Date().toISOString(), progress: { done: schedule.count, total: schedule.count, label: "Paper ready" } });
+      setToast(`${schedule.title} is ready in your library`);
+    } catch (error) {
+      commitSchedulePatch({ status: "failed", error: error.message || "Scheduled generation failed", generationFinishedAt: new Date().toISOString() });
+      if (error.status === 401) setSettingsOpen(true);
+    } finally {
+      activeScheduleIds.current.delete(scheduleId);
+    }
+  }, []);
+
+  useEffect(() => {
+    function tickSchedules() {
+      const now = Date.now();
+      for (const schedule of loadSchedules()) {
+        if (schedule.status === "scheduled" && new Date(schedule.scheduledAt).getTime() <= now) {
+          runScheduledPaper(schedule.id);
+        }
+      }
+    }
+    tickSchedules();
+    const timer = setInterval(tickSchedules, 10_000);
+    return () => clearInterval(timer);
+  }, [runScheduledPaper]);
+
+  function createSchedule(schedule) {
+    persistSchedules([schedule, ...loadSchedules().filter((item) => item.id !== schedule.id)]);
+    setToast(`${schedule.title} scheduled for ${formatDate(schedule.scheduledAt)}`);
+  }
+
+  function removeSchedule(id) {
+    setSchedules(deleteSchedule(id));
+    setToast("Schedule removed");
+  }
+
   function openExam(exam) {
     setCurrentExam(exam);
     setView(exam.status === "completed" ? "results" : "exam");
@@ -162,7 +237,7 @@ export default function PulseTestApplication() {
     if (existing) { openExam(existing); return; }
     const source = demoExam.questions[new Date().getDate() % demoExam.questions.length];
     const question = { ...source, id: `daily-question-${day}`, number: 1 };
-    const fresh = { ...demoExam, id: `daily-${day}`, title: `Daily Case: ${source.sourceTags[0]} Has Entered the Chat`, createdAt: new Date().toISOString(), status: "ready", config: { count: 1, difficulty: source.difficulty, mode: "Daily adaptive case" }, questions: [question] };
+    const fresh = { ...demoExam, id: `daily-${day}`, title: `Daily Case: ${source.sourceTags[0]} Has Entered the Chat`, createdAt: new Date().toISOString(), status: "ready", config: { count: 1, difficulty: source.difficulty, mode: "Daily adaptive case", timing: buildTimingMeta(1) }, questions: [question] };
     persistExam(fresh); openExam(fresh);
   }
 
@@ -255,6 +330,7 @@ export default function PulseTestApplication() {
         <div className="page-wrap">
           {view === "dashboard" && <Dashboard exams={exams} profile={profile} research={research} onNew={() => setView("generator")} onDemo={startDemo} onDaily={startDaily} onOpen={openExam} onResearch={() => setView("research")} />}
           {view === "generator" && <Generator exams={exams} questionMemory={questionMemory} research={research} preset={generatorPreset} onPresetConsumed={() => setGeneratorPreset(null)} onCreated={(exam) => { persistExam(exam); openExam(exam); }} onResearch={(value) => { setResearchState(value); saveResearch(value); }} onNeedKey={() => setSettingsOpen(true)} />}
+          {view === "scheduler" && <SchedulerLab schedules={schedules} exams={exams} onCreate={createSchedule} onCancel={removeSchedule} onRunNow={runScheduledPaper} onOpenExam={openExam} />}
           {view === "library" && <Library exams={exams} onOpen={openExam} onDelete={(id) => { setExams(deleteExam(id)); setToast("Test removed from this device"); }} onNew={() => setView("generator")} />}
           {view === "history" && <QuestionHistory records={questionArchive} exams={exams} onGenerate={() => setView("generator")} onOpenExam={openExam} onTutor={openTutor} />}
           {view === "progress" && <ProgressLab exams={exams} onGenerate={() => setView("generator")} />}
@@ -299,18 +375,19 @@ function Dashboard({ exams, profile, research, onNew, onDemo, onDaily, onOpen, o
 
 function Metric({ label, value, delta, icon, tone }) { return <div className="metric-card"><div className={`metric-icon ${tone}`}><Icon name={icon} /></div><span>{label}</span><strong>{value}</strong><small>{delta}</small></div>; }
 
-function summarizeResearch(research) {
-  if (!research) return "";
-  return `${research.summary}
-Signals: ${research.examSignals.join("; ")}
-Priority topics: ${research.highYieldTopics.map((item) => `${item.subject}: ${item.topic}`).join("; ")}
-Disease watch: ${(research.diseaseWatch || []).map((item) => `${item.disease}: ${item.examAngle}`).join("; ")}`;
-}
-
 function Generator({ exams, questionMemory, research, preset, onPresetConsumed, onCreated, onResearch, onNeedKey }) {
   const [count, setCount] = useState(20); const [difficulty, setDifficulty] = useState("Moderate to high"); const [subjects, setSubjects] = useState(SUBJECTS);
   const [customPrompt, setCustomPrompt] = useState(""); const [useResearch, setUseResearch] = useState(true); const [adaptiveMode, setAdaptiveMode] = useState(getPreferences().adaptiveMode); const [busy, setBusy] = useState(false); const [progress, setProgress] = useState({ done: 0, total: 0, label: "" }); const [error, setError] = useState("");
+  const [generationStartedAt, setGenerationStartedAt] = useState(null); const [elapsed, setElapsed] = useState(0);
   const allocation = useMemo(() => allocateSubjects(count, subjects), [count, subjects]);
+
+  useEffect(() => {
+    if (!generationStartedAt) return undefined;
+    const tick = () => setElapsed(Math.floor((Date.now() - generationStartedAt) / 1000));
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [generationStartedAt]);
 
   useEffect(() => {
     if (!preset?.id) return;
@@ -328,51 +405,13 @@ function Generator({ exams, questionMemory, research, preset, onPresetConsumed, 
 
   function toggleSubject(subject) { setSubjects((current) => current.includes(subject) ? (current.length === 1 ? current : current.filter((item) => item !== subject)) : [...current, subject]); }
 
-  async function callApi(path, body) {
-    const key = loadSessionKey();
-    const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", ...(key ? { "x-openai-key": key } : {}) }, body: JSON.stringify(body) });
-    const data = await response.json();
-    if (!response.ok) { const err = new Error(data.error || "Request failed"); err.status = response.status; throw err; }
-    return data;
-  }
-
   async function generate() {
-    const preferences = getPreferences(); const initialUsage = getTodayUsage();
-    if (initialUsage.questions + count > preferences.dailyQuestionLimit) { setError(`This would exceed today’s ${preferences.dailyQuestionLimit}-question limit. Change it in Settings or choose a shorter paper.`); return; }
-    setBusy(true); setError(""); let activeResearch = research;
+    setBusy(true); setError(""); setElapsed(0); setGenerationStartedAt(Date.now()); setProgress({ done: 0, total: count, label: "Preparing generation queue..." });
     try {
-      if (useResearch && (!research || Date.now() - new Date(research.generatedAt).getTime() > 24 * 60 * 60 * 1000)) {
-        if (initialUsage.research >= preferences.dailyResearchLimit) throw new Error("Deep Search limit reached. Use the saved brief or raise the limit in Settings.");
-        setProgress({ done: 0, total: count, label: "Refreshing the exam signal map…" });
-        const data = await callApi("/api/research", {}); activeResearch = data.research; saveResearch(activeResearch); onResearch(activeResearch); recordUsage("research", 1);
-      }
-      const plan = buildBatchPlan(count, subjects, 10); const questions = []; const coveredTopics = []; const adaptiveProfile = adaptiveMode ? adaptivePromptFromExams(exams) : "Adaptive mode disabled; follow the requested subject blueprint without candidate-history weighting.";
-      const seenFingerprints = questionMemory.map((item) => item.fingerprint);
-      const seenNearFingerprints = questionMemory.map((item) => item.nearFingerprint);
-      const seenQuestionSignatures = questionMemory.map((item) => item.signature);
-      const researchBrief = useResearch ? summarizeResearch(activeResearch) : "";
-      for (let index = 0; index < plan.length; index += 1) {
-        const batch = plan[index]; setProgress({ done: questions.length, total: count, label: `Setting paper · batch ${index + 1} of ${plan.length}` });
-        const data = await callApi("/api/generate", {
-          ...batch, difficulty, mode: "NEET PG 2026 + AIIMS/INI-CET integrated", customPrompt,
-          researchBrief,
-          coveredTopics, adaptiveProfile, reasoningEffort: count >= 60 ? "medium" : "high",
-          useWebSearch: false,
-          seenFingerprints,
-          seenNearFingerprints,
-          seenQuestionSignatures
-        });
-        questions.push(...data.questions.map((question) => ({ ...question, researchSources: data.sources || [] })));
-        coveredTopics.push(...data.questions.flatMap((q) => q.sourceTags));
-        seenFingerprints.push(...data.questions.map((question) => question.fingerprint).filter(Boolean));
-        seenNearFingerprints.push(...data.questions.map((question) => question.nearFingerprint).filter(Boolean));
-        seenQuestionSignatures.push(...data.questions.map((question) => question.signature).filter(Boolean));
-      }
-      setProgress({ done: count, total: count, label: "Paper ready" });
-      recordUsage("questions", count);
-      onCreated({ id: crypto.randomUUID(), title: funTestName(count), createdAt: new Date().toISOString(), status: "ready", config: { count, difficulty, subjects, customPrompt, usedResearch: useResearch, adaptiveMode, adaptiveProfile }, questions });
+      const exam = await generateExamDraft({ count, difficulty, subjects, customPrompt, useResearch, adaptiveMode, exams, research, questionMemory, onProgress: setProgress, onResearch });
+      onCreated(exam);
     } catch (err) { setError(err.message); if (err.status === 401) onNeedKey(); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setGenerationStartedAt(null); }
   }
 
   return <section className="generator-page"><div className="page-title"><div><span className="overline">PAPER STUDIO</span><h1>Build your next <em>thinking test.</em></h1><p>Set the boundaries. The professor panel handles the clinical complexity.</p></div><span className="model-pill"><i /> OpenAI Responses API</span></div>
@@ -385,7 +424,7 @@ function Generator({ exams, questionMemory, research, preset, onPresetConsumed, 
       <label className="research-toggle adaptive-toggle"><span className={`toggle ${adaptiveMode ? "on" : ""}`} onClick={() => setAdaptiveMode(!adaptiveMode)}><i /></span><span><b>Adaptive candidate model</b><small>Uses your prior answers to focus weak subjects, revisit traps and raise difficulty gradually.</small></span><Icon name="brain" /></label>
       <div className="quality-contract"><span>✓</span><div><b>PulseTest-AI quality contract</b><p>Official exam bodies define paper rules · current clinical authority defines answers · ambiguous questions are replaced, never guessed · adaptation remains non-biased.</p></div></div>
       {error && <div className="error-banner">{error}</div>}
-      {busy && <div className="generation-progress"><div><span>{progress.label}</span><b>{progress.done}/{progress.total}</b></div><div className="progress-track"><i style={{ width: `${progress.total ? progress.done / progress.total * 100 : 4}%` }} /></div><small>You can safely retry if a batch is rate-limited. Full tests can take several minutes.</small></div>}
+      {busy && <div className="generation-progress"><div><span>{progress.label}</span><b>{progress.done}/{progress.total}</b></div><div className="progress-track"><i style={{ width: `${progress.total ? progress.done / progress.total * 100 : 4}%` }} /></div><small>Generation timer: {formatTime(elapsed)} · You can safely retry if a batch is rate-limited.</small></div>}
       <button className="primary-button generate-button" disabled={busy} onClick={generate}>{busy ? <><span className="spinner" /> Generating paper…</> : <><Icon name="spark" /> Generate {count} questions <Icon name="arrow" /></>}</button>
     </div>
     <aside className="studio-preview"><div className="preview-card"><span className="overline">LIVE BLUEPRINT</span><h3>Your paper at a glance</h3><div className="paper-ring" style={{ "--progress": `${Math.min(count / 180 * 100, 100) * 3.6}deg` }}><div><strong>{count}</strong><span>questions</span></div></div><dl><div><dt>Format</dt><dd>Single best answer</dd></div><div><dt>Scoring</dt><dd>+4 / −1</dd></div><div><dt>Est. time</dt><dd>{Math.ceil(count * 1.17)} min</dd></div><div><dt>Review</dt><dd>Full reasoning</dd></div><div><dt>No-repeat memory</dt><dd>{questionMemory.length || 0} prior questions</dd></div></dl></div><div className="allocation-card"><span className="overline">ALLOCATION</span>{allocation.map((item) => <div className="allocation-row" key={item.subject}><span>{item.subject}</span><i><b style={{ width: `${item.count / Math.max(...allocation.map((a) => a.count)) * 100}%` }} /></i><strong>{item.count}</strong></div>)}</div><p className="medical-note">Educational practice only. Generated explanations should be verified against authoritative current guidance before clinical use.</p></aside></div>
@@ -399,7 +438,7 @@ function Library({ exams, onOpen, onDelete, onNew }) {
 
 function ExamPlayer({ exam, onSave, onSubmit, onExit }) {
   const [index, setIndex] = useState(exam.progress?.index || 0); const [answers, setAnswers] = useState(exam.answers || {}); const [flags, setFlags] = useState(exam.flags || []); const [seconds, setSeconds] = useState(exam.elapsedSeconds || 0); const [palette, setPalette] = useState(false);
-  const question = exam.questions[index]; const answered = Object.keys(answers).length;
+  const question = exam.questions[index]; const answered = Object.keys(answers).length; const timing = exam.config?.timing || buildTimingMeta(exam.questions.length); const remainingSeconds = Math.max(0, timing.sec - seconds);
   useEffect(() => { const timer = setInterval(() => setSeconds((value) => value + 1), 1000); return () => clearInterval(timer); }, []);
   useEffect(() => { const timer = setTimeout(() => onSave({ ...exam, answers, flags, elapsedSeconds: seconds, progress: { index } }), 600); return () => clearTimeout(timer); }, [answers, flags, index]); // eslint-disable-line react-hooks/exhaustive-deps
   function choose(id) { setAnswers((current) => ({ ...current, [question.id]: id })); }
@@ -410,9 +449,10 @@ function ExamPlayer({ exam, onSave, onSubmit, onExit }) {
     let correct = 0; let incorrect = 0;
     for (const item of exam.questions) { if (!answers[item.id]) continue; if (answers[item.id] === item.correctOptionId) correct += 1; else incorrect += 1; }
     const score = correct * 4 - incorrect; const maxScore = exam.questions.length * 4;
-    onSubmit({ ...exam, status: "completed", answers, flags, elapsedSeconds: seconds, completedAt: new Date().toISOString(), result: { correct, incorrect, unanswered, score, maxScore, percentage: Math.max(0, Math.round(score / maxScore * 100)), accuracy: answered ? Math.round(correct / answered * 100) : 0 } });
+    const result = { correct, incorrect, unanswered, score, maxScore, percentage: Math.max(0, Math.round(score / maxScore * 100)), accuracy: answered ? Math.round(correct / answered * 100) : 0 };
+    onSubmit({ ...exam, status: "completed", answers, flags, elapsedSeconds: seconds, completedAt: new Date().toISOString(), result: { ...result, certification: certificateForResult(result, exam.questions.length) } });
   }
-  return <div className="exam-shell"><header className="exam-header"><button className="exam-brand" onClick={onExit}><span className="brand-mark"><span /></span><b>PulseTest-AI</b></button><div className="exam-progress"><div><span>Question {index + 1} of {exam.questions.length}</span><b>{Math.round(answered / exam.questions.length * 100)}% answered</b></div><i><span style={{ width: `${answered / exam.questions.length * 100}%` }} /></i></div><div className="exam-tools"><span className="timer"><Icon name="clock" /> {formatTime(seconds)}</span><button className="secondary-button palette-button" onClick={() => setPalette(!palette)}>Palette</button><button className="primary-button compact" onClick={submit}>Submit test</button></div></header><div className="exam-body"><aside className={`question-palette ${palette ? "show" : ""}`}><div className="palette-head"><div><span className="overline">NAVIGATOR</span><h3>Question palette</h3></div><button className="icon-button palette-close" onClick={() => setPalette(false)}><Icon name="close" /></button></div><div className="palette-grid">{exam.questions.map((item, i) => <button key={item.id} onClick={() => { setIndex(i); setPalette(false); }} className={`${i === index ? "current" : ""} ${answers[item.id] ? "answered" : ""} ${flags.includes(item.id) ? "flagged" : ""}`}>{i + 1}</button>)}</div><div className="palette-legend"><span><i className="answered" />Answered</span><span><i className="current" />Current</span><span><i className="flagged" />Flagged</span></div><div className="attempt-card"><span>{answered}/{exam.questions.length}</span><p><b>Questions answered</b>{exam.questions.length - answered} still open</p></div></aside><main className="question-stage"><div className="question-meta"><div><span className="subject-tag">{question.subject}</span><span>{question.setting}</span><span>{question.difficulty}</span></div><button className={flags.includes(question.id) ? "flag-button active" : "flag-button"} onClick={toggleFlag}><Icon name="flag" size={16} />{flags.includes(question.id) ? "Flagged" : "Flag for review"}</button></div><div className="question-number">QUESTION {String(index + 1).padStart(2, "0")}</div><h2 className="question-stem">{question.stem}</h2><div className="options-list">{question.options.map((option) => <button className={answers[question.id] === option.id ? "selected" : ""} onClick={() => choose(option.id)} key={option.id}><span>{option.id}</span><p>{option.text}</p><i><Icon name="check" size={14} /></i></button>)}</div><div className="question-footer"><button className="secondary-button" disabled={index === 0} onClick={() => setIndex(index - 1)}>← Previous</button><span>Choose the single best answer</span>{index === exam.questions.length - 1 ? <button className="primary-button" onClick={submit}>Finish & submit</button> : <button className="primary-button" onClick={() => setIndex(index + 1)}>Next question <Icon name="arrow" size={15} /></button>}</div></main></div></div>;
+  return <div className="exam-shell"><header className="exam-header"><button className="exam-brand" onClick={onExit}><span className="brand-mark"><span /></span><b>PulseTest-AI</b></button><div className="exam-progress"><div><span>Question {index + 1} of {exam.questions.length}</span><b>{Math.round(answered / exam.questions.length * 100)}% answered</b></div><i><span style={{ width: `${answered / exam.questions.length * 100}%` }} /></i></div><div className="exam-tools"><span className={`timer ${remainingSeconds === 0 ? "expired" : ""}`}><Icon name="clock" /> {remainingSeconds > 0 ? formatTime(remainingSeconds) : "00:00"}</span><button className="secondary-button palette-button" onClick={() => setPalette(!palette)}>Palette</button><button className="primary-button compact" onClick={submit}>Submit test</button></div></header><div className="exam-body"><aside className={`question-palette ${palette ? "show" : ""}`}><div className="palette-head"><div><span className="overline">NAVIGATOR</span><h3>Question palette</h3></div><button className="icon-button palette-close" onClick={() => setPalette(false)}><Icon name="close" /></button></div><div className="palette-grid">{exam.questions.map((item, i) => <button key={item.id} onClick={() => { setIndex(i); setPalette(false); }} className={`${i === index ? "current" : ""} ${answers[item.id] ? "answered" : ""} ${flags.includes(item.id) ? "flagged" : ""}`}>{i + 1}</button>)}</div><div className="palette-legend"><span><i className="answered" />Answered</span><span><i className="current" />Current</span><span><i className="flagged" />Flagged</span></div><div className="attempt-card"><span>{answered}/{exam.questions.length}</span><p><b>Questions answered</b>{exam.questions.length - answered} still open</p></div></aside><main className="question-stage"><div className="question-meta"><div><span className="subject-tag">{question.subject}</span><span>{question.setting}</span><span>{question.difficulty}</span></div><button className={flags.includes(question.id) ? "flag-button active" : "flag-button"} onClick={toggleFlag}><Icon name="flag" size={16} />{flags.includes(question.id) ? "Flagged" : "Flag for review"}</button></div><div className="question-number">QUESTION {String(index + 1).padStart(2, "0")}</div><h2 className="question-stem">{question.stem}</h2><div className="options-list">{question.options.map((option) => <button className={answers[question.id] === option.id ? "selected" : ""} onClick={() => choose(option.id)} key={option.id}><span>{option.id}</span><p>{option.text}</p><i><Icon name="check" size={14} /></i></button>)}</div><div className="question-footer"><button className="secondary-button" disabled={index === 0} onClick={() => setIndex(index - 1)}>← Previous</button><span>{remainingSeconds > 0 ? `NEET pace: ${timing.spq}s per question` : "Allocated exam time has ended"}</span>{index === exam.questions.length - 1 ? <button className="primary-button" onClick={submit}>Finish & submit</button> : <button className="primary-button" onClick={() => setIndex(index + 1)}>Next question <Icon name="arrow" size={15} /></button>}</div></main></div></div>;
 }
 
 function CommandPalette({ query, inputRef, results, onQuery, onClose, onSelect }) {

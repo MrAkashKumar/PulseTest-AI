@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { openAIFromRequest, modelName, safeApiError } from "@/lib/openai-server";
 import { buildTutorInstructions } from "@/lib/prompts";
 import { extractSources } from "@/lib/research-server";
+import { buildPromptCacheKey } from "@/lib/prompt-cache-key";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -21,7 +22,7 @@ export async function POST(request) {
       instructions: buildTutorInstructions(),
       input: [{ role: "user", content: message }],
       previous_response_id: body.previousResponseId || undefined,
-      prompt_cache_key: `pulsetest-ai:tutor:${useWorldSearch ? "world" : "local"}`,
+      prompt_cache_key: buildPromptCacheKey(useWorldSearch ? "tutor-world-v1" : "tutor-local-v1"),
       max_output_tokens: 900,
       reasoning: { effort: useWorldSearch ? "medium" : "low" },
       store: true,

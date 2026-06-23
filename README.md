@@ -7,11 +7,38 @@ It is built to feel closer to a LeetCode-style exam workspace than a plain MCQ p
 - custom papers from 5 to 180 questions
 - post-test review with trap, clue, memory tip, and why-the-other-options-are-wrong
 - optional Deep Search research for recent guideline-sensitive and trend-sensitive topics
+- scheduler mode that prepares papers ahead of time with a 30/60/120-minute prep window
+- generation progress timer, ready-paper queue, and local question history
+- Silver, Gold, and Diamond report-card certificates after submission
 - daily case mode, analytics, streaks, and subject-wise repair pathways
 - local-first storage with optional Supabase sync
 - same-origin server routes so OpenAI keys stay out of client code
+- compact prompt/schema contract to reduce token usage without lowering question quality
 
 ## Quick Start
+
+Use `npm` by default. It works out of the box on machines that do not already have `pnpm` installed.
+
+### Prerequisites
+
+- Node.js `20.13.1` or newer
+- npm `10+` recommended
+
+### Recommended local setup
+
+```bash
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+If you do not want to store a server key locally yet, you can leave `OPENAI_API_KEY` blank and paste a session-only key inside the app from `Settings -> API & generation limits`.
+
+### Optional pnpm setup
+
+If you prefer pnpm and already have it installed, the equivalent commands are:
 
 ```bash
 pnpm install
@@ -19,9 +46,26 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+If `pnpm` is not installed on your machine, use the `npm` commands above.
 
-If you do not want to store a server key locally yet, you can leave `OPENAI_API_KEY` blank and paste a session-only key inside the app from `Settings -> API & generation limits`.
+If your machine has Corepack but not pnpm activated yet:
+
+```bash
+corepack enable
+corepack prepare pnpm@latest --activate
+pnpm install
+pnpm dev
+```
+
+### Where is `.env.example`?
+
+The file is in the project root:
+
+```text
+/Users/akash/Engineering/NEET PG Question Predicator /.env.example
+```
+
+Copy it to `.env.local` before starting the app.
 
 ## Setup Screens
 
@@ -32,7 +76,26 @@ If you do not want to store a server key locally yet, you can leave `OPENAI_API_
 
 Local development uses `.env.local`. Production deployments use your platform's environment variable manager, for example Vercel Environment Variables.
 
-PulseTest-AI already includes [.env.example](./.env.example) as the single source of truth for setup.
+PulseTest-AI already includes [.env.example](./.env.example) as the single source of truth for setup, with example values for every supported setting.
+
+### Local environment setup
+
+1. Install dependencies.
+2. Copy `.env.example` to `.env.local`.
+3. Add at least `OPENAI_API_KEY`.
+4. Start the app with `npm run dev`.
+
+Minimal local setup:
+
+```bash
+cp .env.example .env.local
+```
+
+Then edit `.env.local` and fill:
+
+```bash
+OPENAI_API_KEY=your_server_side_key_here
+```
 
 ### Required vs optional
 
@@ -105,6 +168,127 @@ Extra ways to reduce latency:
 - generate 20 to 60 questions for everyday study, then reserve 180-question runs for grand tests
 - keep the OpenAI key on the server in local dev or Vercel instead of re-entering it repeatedly
 - add Supabase only when you need sync, not for the first local run
+- use Scheduler for larger tests so questions are generated before the exam session starts
+
+## Token Optimization
+
+PulseTest-AI now uses a more token-efficient generation path without relaxing the medical quality rules.
+
+What was optimized:
+
+- compact model-facing JSON keys for generated questions, then server-side expansion back into readable app fields
+- short versioned `prompt_cache_key` values to avoid the OpenAI `64` character limit
+- stable instructions plus smaller variable request payloads so repeated prompt content is more cache-friendly
+- smaller research summaries inside generation requests
+- capped recent-topic and prior-signature context so anti-repeat memory stays useful without growing unbounded
+- dynamic `max_output_tokens` budgets for generation and research
+- automatic quality-gate retries when a model draft fails validation, for example missing patient sex or pregnancy context
+
+What was not compromised:
+
+- one-best-answer validation
+- distractor review quality
+- answer audit metadata
+- NEET-style scenario structure
+- no-repeat question memory
+- official-source hierarchy and fairness rules
+
+Recommended settings for the best quality-per-token balance:
+
+- `OPENAI_REASONING_EFFORT=medium`
+- `OPENAI_RESEARCH_REASONING_EFFORT=medium`
+- `OPENAI_SEARCH_CONTEXT_SIZE=medium`
+- `OPENAI_RESEARCH_CONTEXT_SIZE=medium`
+
+For everyday use:
+
+- keep Deep Search off for routine mixed practice unless you need trend-sensitive questions
+- generate `20` to `60` questions for daily study
+- reserve `180` questions for full grand tests
+- keep your custom prompt focused and short instead of writing long repeated instructions
+
+## Length Issue Fix
+
+If generation previously failed with:
+
+```text
+400 Invalid 'prompt_cache_key': string too long
+```
+
+the issue came from building `prompt_cache_key` with the full difficulty text plus the whole subject-allocation string.
+
+This is now fixed by short versioned cache keys that stay below the OpenAI limit while still supporting prompt caching.
+
+## Question Timing Contract
+
+PulseTest-AI now treats NEET timing as a fixed engine rule, not a loose UI estimate.
+
+Formula:
+
+```text
+Total Time (seconds) = Number of Questions x 60
+```
+
+Examples:
+
+- `1` question -> `60` seconds
+- `10` questions -> `600` seconds
+- `20` questions -> `1200` seconds
+- `180` questions -> `10800` seconds
+
+The generator and exam player both use the same compact timing object:
+
+```json
+{
+  "meta": {
+    "q": 10,
+    "spq": 60,
+    "sec": 600
+  }
+}
+```
+
+Key meanings:
+
+- `q`: number of questions
+- `spq`: seconds per question
+- `sec`: total countdown time in seconds
+
+The app stores the same timing block in the paper config so the exam header countdown always matches the generated paper length.
+
+## Scheduler And Timer Flow
+
+The Scheduler page lets a candidate choose the number of questions, subject mix, difficulty, Deep Search, adaptive mode, a generation time, and when preparation should begin.
+
+Example flow:
+
+1. Schedule `20 questions` for `8:00 PM`.
+2. Select `Prep starts 1 hour before`.
+3. At `7:00 PM`, the card changes into a prep-window reminder with the selected subjects/topic focus.
+4. At `8:00 PM`, PulseTest-AI starts generation, shows batch progress, and runs a generation timer.
+5. When generation finishes, the timer stops and the ready paper appears in the library.
+
+Current behavior is local-first:
+
+- schedules are saved in browser storage under the PulseTest-AI local cache
+- the app must be open for exact-time generation
+- if the app was closed, overdue scheduled papers are picked up when the app is opened again
+- generated scheduled papers use the same no-repeat memory, answer audit, research reuse, and adaptive profile as manual papers
+
+For production-grade background jobs, add a server queue such as Supabase Edge Functions, Upstash Redis/QStash, Inngest, or a Vercel Cron route that calls the generation API on behalf of the user. The current implementation keeps the project simple and safe for local/Vercel deployment without storing user OpenAI keys in a background worker.
+
+## Certificates And Motivation
+
+After submission, the report card assigns an encouraging certificate:
+
+| Tier | Rule | Meaning |
+| --- | --- | --- |
+| Diamond | `>= 85%` and no unanswered questions | Elite accuracy with full commitment |
+| Gold | `>= 70%` | Strong exam readiness |
+| Silver | `>= 50%` | Solid foundation; next marks are in the traps |
+| Practice | below Silver | Attempt logged; report becomes the repair map |
+
+Certificates are intentionally motivational only. They do not replace the subject-wise weakness report, trap review, or 7-day repair pathway.
 
 ## Optional Supabase Setup
 
@@ -132,6 +316,8 @@ flowchart LR
     A["Candidate in browser"] --> B["Next.js UI"]
     B --> C["Same-origin API routes"]
     B --> D["Local storage + session storage"]
+    B --> I["Scheduler queue + countdown"]
+    I --> B
     C --> E["OpenAI Responses API"]
     E --> F["Web search tool"]
     C --> G["Optional Supabase sync"]
@@ -144,8 +330,10 @@ flowchart LR
 2. The app sends generation and research requests to its own Next.js API routes.
 3. Those server routes call OpenAI with structured JSON schema outputs.
 4. Generated questions are validated before the paper is accepted.
-5. Results are stored locally first and optionally mirrored to Supabase.
-6. After submission, PulseTest-AI computes subject performance, weak points, streaks, and a repair pathway.
+5. The server computes compact timing metadata using the exact `questions x 60` rule.
+6. Results are stored locally first and optionally mirrored to Supabase.
+7. Scheduled papers reuse the same generator, no-repeat memory, and answer-audit path.
+8. After submission, PulseTest-AI computes subject performance, weak points, certificates, streaks, and a repair pathway.
 
 ## Project Structure
 
@@ -159,6 +347,7 @@ app/
     research              Deep Search brief retrieval + refresh
 components/
   RecallLab.jsx           main app shell and navigation
+  SchedulerLab.jsx        scheduled paper setup, countdowns, and ready queue
   SettingsPanel.jsx       key handling, limits, and runtime hints
   ResultsReport.jsx       scorecard and answer review
   ProgressLab.jsx         progress charts and weak/strong subject views
@@ -166,8 +355,13 @@ components/
 lib/
   runtime-config.js       one place for env/config parsing
   openai-server.js        OpenAI client creation and error handling
+  generation-client.js    shared browser generation engine for manual + scheduled papers
+  certification.js        Silver/Gold/Diamond report-card tier logic
+  exam-timing.js          exact NEET timing math for countdowns
+  prompt-cache-key.js     short hashed prompt_cache_key builder
   research-server.js      research refresh and source extraction
   question-quality.js     answer consistency and batch validation
+  question-schema.js      compact model schema + server-side field expansion
   analytics.js            adaptive study logic and repair pathway
   client-store.js         local-first persistence and optional Supabase sync
 supabase/
@@ -194,10 +388,48 @@ PulseTest-AI is designed so API keys do not need to appear in client code:
 ## Development Commands
 
 ```bash
+npm run dev
+npm run lint
+npm run test
+npm run build
+npm run start
+```
+
+Optional pnpm equivalents:
+
+```bash
 pnpm dev
 pnpm lint
 pnpm test
 pnpm build
+pnpm start
+```
+
+## Command Reference
+
+Use one package manager consistently for a local setup.
+
+`npm` flow:
+
+```bash
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+`pnpm` flow:
+
+```bash
+pnpm install
+cp .env.example .env.local
+pnpm dev
+```
+
+Production preview after building:
+
+```bash
+npm run build
+npm run start
 ```
 
 ## Notes
