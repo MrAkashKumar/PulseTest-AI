@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { performResearch } from "@/lib/research-server";
+import { cronConfig } from "@/lib/runtime-config";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 export async function GET(request) {
-  const secret = process.env.CRON_SECRET;
+  const { secret } = cronConfig();
   if (!secret) {
     return NextResponse.json({ error: "CRON_SECRET is not configured" }, { status: 503 });
   }
