@@ -4,6 +4,8 @@ import { allocateSubjects, buildBatchPlan } from "../lib/constants.js";
 import { demoExam } from "../lib/demo-exam.js";
 import { adaptivePromptFromExams, analyzePerformance, examSubjectBreakdown } from "../lib/analytics.js";
 import { validateQuestionBatch } from "../lib/question-quality.js";
+import { dedupeQuestions, questionIdentity } from "../lib/question-dedup.js";
+import { buildQuestionArchive, summarizeQuestionArchive } from "../lib/question-history.js";
 
 test("180-question blueprint matches the requested weightage", () => {
   assert.deepEqual(allocateSubjects(180), [
@@ -51,4 +53,40 @@ test("quality gate accepts an audited key and rejects ambiguity", () => {
   assert.equal(validateQuestionBatch([audited], 1).length, 1);
   const duplicate = { ...audited, options: audited.options.map((option, index) => index === 3 ? { ...option, text: audited.options[0].text } : option) };
   assert.throws(() => validateQuestionBatch([duplicate], 1), /duplicate options/);
+});
+
+test("question identity stays stable and dedupe rejects repeats", () => {
+  const audited = { ...demoExam.questions[1], evidenceLevel: "Established standard", timeSensitivity: "Stable", answerCheck: "HELLP syndrome at 34 weeks with maternal disease progression requires delivery because it is the only definitive treatment in this exact stem." };
+  const identityA = questionIdentity(audited);
+  const identityB = questionIdentity({ ...audited, stem: `${audited.stem} ` });
+  assert.equal(identityA.fingerprint, identityB.fingerprint);
+  const { accepted, rejected } = dedupeQuestions([audited, { ...audited }]);
+  assert.equal(accepted.length, 1);
+  assert.equal(rejected.length, 1);
+});
+
+test("question archive preserves paper flow and subject mix context", () => {
+  const exam = {
+    ...demoExam,
+    id: "exam-1",
+    title: "Grand Test Alpha",
+    createdAt: "2026-06-23T08:30:00.000Z",
+    status: "completed",
+    completedAt: "2026-06-23T10:00:00.000Z",
+    config: { difficulty: "Moderate to high", mode: "NEET PG 2026 + AIIMS/INI-CET integrated", usedResearch: true, adaptiveMode: true, subjects: ["Medicine", "OBGY"] },
+    answers: {
+      [demoExam.questions[0].id]: demoExam.questions[0].correctOptionId,
+      [demoExam.questions[1].id]: "A"
+    },
+    result: { correct: 1, incorrect: 1, unanswered: 3, percentage: 20, accuracy: 50 }
+  };
+  const archive = buildQuestionArchive([exam]);
+  assert.equal(archive.length, 5);
+  assert.equal(archive[0].paperSubjectMix.reduce((sum, item) => sum + item.count, 0), 5);
+  assert.equal(archive.find((item) => item.questionId === demoExam.questions[0].id).answerStatus, "correct");
+  assert.equal(archive.find((item) => item.questionId === demoExam.questions[1].id).answerStatus, "wrong");
+  const summary = summarizeQuestionArchive(archive);
+  assert.equal(summary.totalPapers, 1);
+  assert.ok(summary.subjects.length > 0);
+  assert.ok(summary.topics.length > 0);
 });

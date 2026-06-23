@@ -1,24 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SUBJECTS, allocateSubjects, buildBatchPlan } from "@/lib/constants";
 import { demoExam } from "@/lib/demo-exam";
-import { deleteExam, getPreferences, getProfile, getTodayUsage, loadExams, loadResearch, loadSessionKey, recordUsage, saveExam, saveProfile, saveResearch, saveSessionKey } from "@/lib/client-store";
+import { deleteExam, getPreferences, getProfile, getTodayUsage, loadExams, loadQuestionArchive, loadQuestionMemory, loadResearch, loadSessionKey, recordUsage, saveExam, saveProfile, saveResearch } from "@/lib/client-store";
 import { adaptivePromptFromExams, funTestName } from "@/lib/analytics";
-import ProgressLab from "./ProgressLab";
-import ResultsReport from "./ResultsReport";
-import ResearchIntelligence from "./ResearchIntelligence";
-import SettingsPanel from "./SettingsPanel";
 
 const navItems = [
   ["dashboard", "grid", "Dashboard"], ["generator", "spark", "Question generator"],
-  ["library", "book", "My test library"], ["progress", "chart", "Progress report"], ["research", "radar", "Research signals"]
+  ["library", "book", "My test library"], ["history", "layers", "Question history"], ["progress", "chart", "Progress report"], ["research", "radar", "Research signals"], ["tutor", "message", "AI tutor"]
 ];
-
-// Legacy surfaces remain as lightweight fallbacks for previously cached records.
-const ResultsSurface = ResultsReport || Results;
-const ResearchSurface = ResearchIntelligence || ResearchLab;
-const SettingsSurface = SettingsPanel || SettingsModal;
 
 const iconPaths = {
   grid: ["M4 4h6v6H4z", "M14 4h6v6h-6z", "M4 14h6v6H4z", "M14 14h6v6h-6z"],
@@ -37,8 +29,17 @@ const iconPaths = {
   search: ["M11 18a7 7 0 100-14 7 7 0 000 14z", "M16 16l5 5"],
   brain: ["M9.5 4.5A3 3 0 006.6 8a3 3 0 00-1 5.7A3.5 3.5 0 009 19.9c.7 0 1.4-.2 2-.6V5.8a3 3 0 00-1.5-1.3z", "M14.5 4.5A3 3 0 0117.4 8a3 3 0 011 5.7 3.5 3.5 0 01-3.4 6.2c-.7 0-1.4-.2-2-.6V5.8a3 3 0 011.5-1.3z", "M8 10h3", "M13 14h3"],
   chart: ["M4 20V10", "M10 20V4", "M16 20v-7", "M22 20H2"],
-  menu: ["M4 7h16", "M4 12h16", "M4 17h16"]
+  layers: ["M12 3l8 4-8 4-8-4 8-4z", "M4 12l8 4 8-4", "M4 17l8 4 8-4"],
+  menu: ["M4 7h16", "M4 12h16", "M4 17h16"],
+  message: ["M21 15a2 2 0 01-2 2H8l-5 4V5a2 2 0 012-2h14a2 2 0 012 2z", "M8 9h8", "M8 13h5"]
 };
+
+const ProgressLab = dynamic(() => import("./ProgressLab"), { loading: () => <SurfaceLoader title="Loading progress report…" detail="Preparing your trends and weak-point map." /> });
+const ResultsSurface = dynamic(() => import("./ResultsReport"), { loading: () => <SurfaceLoader title="Loading answer review…" detail="Bringing in your traps, clues and report card." /> });
+const ResearchSurface = dynamic(() => import("./ResearchIntelligence"), { loading: () => <SurfaceLoader title="Loading research signals…" detail="Fetching the latest exam and disease trend briefing." /> });
+const SettingsSurface = dynamic(() => import("./SettingsPanel"), { loading: () => <SurfaceLoader title="Loading settings…" detail="Preparing keys, runtime config and limits." /> });
+const AITutor = dynamic(() => import("./AITutor"), { loading: () => <SurfaceLoader title="Opening AI tutor…" detail="Getting the in-app explanation workspace ready." /> });
+const QuestionHistory = dynamic(() => import("./QuestionHistory"), { loading: () => <SurfaceLoader title="Loading question history…" detail="Preparing your generated question bank and subject-mix view." /> });
 
 function Icon({ name, size = 18 }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{(iconPaths[name] || []).map((d, i) => <path d={d} key={i} />)}</svg>;
@@ -58,20 +59,33 @@ function Logo() {
   return <div className="brand"><span className="brand-mark"><span /></span><span>PulseTest<span className="brand-dot">-AI</span></span></div>;
 }
 
+function SurfaceLoader({ title, detail }) {
+  return <section className="panel quick-search-panel"><span className="overline">LOADING</span><h3>{title}</h3><p>{detail}</p></section>;
+}
+
 export default function PulseTestApplication() {
   const [view, setView] = useState("dashboard");
   const [exams, setExams] = useState([]);
   const [profile, setProfile] = useState({ name: "Doctor", streak: 0 });
+  const [questionMemory, setQuestionMemory] = useState([]);
+  const [questionArchive, setQuestionArchive] = useState([]);
   const [currentExam, setCurrentExam] = useState(null);
   const [research, setResearchState] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [generatorPreset, setGeneratorPreset] = useState(null);
+  const [tutorDraft, setTutorDraft] = useState(null);
   const [toast, setToast] = useState("");
+  const searchInputRef = useRef(null);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       setExams(loadExams());
       setProfile(getProfile());
+      setQuestionMemory(loadQuestionMemory());
+      setQuestionArchive(loadQuestionArchive());
       setResearchState(loadResearch());
     });
     return () => cancelAnimationFrame(frame);
@@ -81,14 +95,61 @@ export default function PulseTestApplication() {
     if (!toast) return; const timer = setTimeout(() => setToast(""), 3500); return () => clearTimeout(timer);
   }, [toast]);
 
-  function navigate(next) { setView(next); setCurrentExam(null); setSidebarOpen(false); }
+  useEffect(() => {
+    function onKeyDown(event) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen((open) => !open);
+        return;
+      }
+      if (event.key === "Escape") {
+        setSearchOpen(false);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const frame = requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [searchOpen]);
+
+  function navigate(next) {
+    setView(next);
+    setCurrentExam(null);
+    setSidebarOpen(false);
+    setSearchOpen(false);
+  }
+
+  function openGeneratorWithPreset(preset) {
+    setGeneratorPreset({ id: crypto.randomUUID(), ...preset });
+    setView("generator");
+    setCurrentExam(null);
+    setSidebarOpen(false);
+    setSearchOpen(false);
+  }
+
+  function openTutor(text) {
+    setTutorDraft({ id: crypto.randomUUID(), text });
+    setView("tutor");
+    setSidebarOpen(false);
+    setSearchOpen(false);
+  }
 
   async function persistExam(exam) {
-    const next = await saveExam(exam); setExams(next);
+    const next = await saveExam(exam);
+    setExams(next);
+    setQuestionMemory(loadQuestionMemory());
+    setQuestionArchive(loadQuestionArchive());
   }
 
   function openExam(exam) {
-    setCurrentExam(exam); setView(exam.status === "completed" ? "results" : "exam");
+    setCurrentExam(exam);
+    setView(exam.status === "completed" ? "results" : "exam");
+    setSidebarOpen(false);
+    setSearchOpen(false);
   }
 
   function startDemo() {
@@ -103,6 +164,72 @@ export default function PulseTestApplication() {
     const question = { ...source, id: `daily-question-${day}`, number: 1 };
     const fresh = { ...demoExam, id: `daily-${day}`, title: `Daily Case: ${source.sourceTags[0]} Has Entered the Chat`, createdAt: new Date().toISOString(), status: "ready", config: { count: 1, difficulty: source.difficulty, mode: "Daily adaptive case" }, questions: [question] };
     persistExam(fresh); openExam(fresh);
+  }
+
+  const commandResults = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const viewActions = navItems.map(([id, icon, label]) => ({
+      id: `view-${id}`,
+      type: "view",
+      icon,
+      title: label,
+      detail: id === "generator" ? "Create a fresh NEET PG-style paper" : `Open ${label.toLowerCase()}`
+    }));
+    const quickActions = [
+      { id: "daily", type: "daily", icon: "clock", title: "Solve today’s daily case", detail: "Jump into the one-question retrieval drill" },
+      { id: "demo", type: "demo", icon: "spark", title: "Open 5-question demo", detail: "See the full experience quickly" }
+    ];
+    const subjectActions = SUBJECTS.map((subject) => ({
+      id: `subject-${subject}`,
+      type: "subject",
+      icon: "brain",
+      title: subject,
+      detail: "Start a focused subject drill"
+    }));
+    const examActions = exams.map((exam) => ({
+      id: `exam-${exam.id}`,
+      type: "exam",
+      icon: exam.status === "completed" ? "check" : "book",
+      title: exam.title,
+      detail: `${exam.questions.length} questions · ${exam.status === "completed" ? `${exam.result?.percentage || 0}%` : "Resume paper"}`,
+      exam
+    }));
+    const researchActions = (research?.highYieldTopics || []).slice(0, 6).map((item, index) => ({
+      id: `signal-${index}`,
+      type: "signal",
+      icon: "radar",
+      title: item.topic,
+      detail: `${item.subject} · Turn this signal into a focused paper`,
+      subject: item.subject
+    }));
+    const all = [...viewActions, ...quickActions, ...subjectActions, ...researchActions, ...examActions];
+    if (!query) return all.slice(0, 12);
+    return all.filter((item) => `${item.title} ${item.detail}`.toLowerCase().includes(query)).slice(0, 12);
+  }, [exams, research, searchQuery]);
+
+  function runCommand(action) {
+    if (action.type === "view") navigate(action.id.replace("view-", ""));
+    else if (action.type === "exam") openExam(action.exam);
+    else if (action.type === "daily") startDaily();
+    else if (action.type === "demo") startDemo();
+    else if (action.type === "subject") {
+      openGeneratorWithPreset({
+        subjects: [action.title],
+        count: 20,
+        difficulty: "Moderate to high",
+        useResearch: true,
+        prompt: `Create a focused ${action.title} NEET PG practice set with clinical scenarios, decisive traps and high-yield Indian exam-style reasoning.`
+      });
+    } else if (action.type === "signal") {
+      openGeneratorWithPreset({
+        subjects: action.subject ? [action.subject] : SUBJECTS,
+        count: 20,
+        difficulty: "Moderate to high",
+        useResearch: true,
+        prompt: `Build a focused paper around the research signal: ${action.title}. Keep the style NEET PG India, clinically tricky but fair, with strong explanation and trap analysis.`
+      });
+    }
+    setSearchQuery("");
   }
 
   return (
@@ -122,20 +249,23 @@ export default function PulseTestApplication() {
       <main className="main-panel">
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open menu"><Icon name="menu" /></button>
-          <div className="top-search"><Icon name="search" size={16} /><span>Search tests and topics</span><kbd>⌘ K</kbd></div>
+          <button className="top-search" onClick={() => setSearchOpen(true)} aria-label="Open quick search"><Icon name="search" size={16} /><span>Search tests, subjects and quick actions</span><kbd>⌘ K</kbd></button>
           <div className="topbar-actions"><span className="date-pill">{new Intl.DateTimeFormat("en", { weekday: "short", day: "numeric", month: "short" }).format(new Date())}</span><button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Settings"><Icon name="settings" /></button><span className="avatar small">DR</span></div>
         </header>
         <div className="page-wrap">
           {view === "dashboard" && <Dashboard exams={exams} profile={profile} research={research} onNew={() => setView("generator")} onDemo={startDemo} onDaily={startDaily} onOpen={openExam} onResearch={() => setView("research")} />}
-          {view === "generator" && <Generator exams={exams} research={research} onCreated={(exam) => { persistExam(exam); openExam(exam); }} onResearch={(value) => { setResearchState(value); saveResearch(value); }} onNeedKey={() => setSettingsOpen(true)} />}
+          {view === "generator" && <Generator exams={exams} questionMemory={questionMemory} research={research} preset={generatorPreset} onPresetConsumed={() => setGeneratorPreset(null)} onCreated={(exam) => { persistExam(exam); openExam(exam); }} onResearch={(value) => { setResearchState(value); saveResearch(value); }} onNeedKey={() => setSettingsOpen(true)} />}
           {view === "library" && <Library exams={exams} onOpen={openExam} onDelete={(id) => { setExams(deleteExam(id)); setToast("Test removed from this device"); }} onNew={() => setView("generator")} />}
+          {view === "history" && <QuestionHistory records={questionArchive} exams={exams} onGenerate={() => setView("generator")} onOpenExam={openExam} onTutor={openTutor} />}
           {view === "progress" && <ProgressLab exams={exams} onGenerate={() => setView("generator")} />}
           {view === "research" && <ResearchSurface research={research} onResearch={(value) => { setResearchState(value); saveResearch(value); }} onNeedKey={() => setSettingsOpen(true)} onGenerate={() => setView("generator")} />}
+          {view === "tutor" && <AITutor draft={tutorDraft} onDraftConsumed={() => setTutorDraft(null)} onNeedKey={() => setSettingsOpen(true)} />}
           {view === "exam" && currentExam && <ExamPlayer exam={currentExam} onSave={persistExam} onSubmit={(completed) => { persistExam(completed); setCurrentExam(completed); setView("results"); const today = new Date().toISOString().slice(0, 10); const nextProfile = { ...profile, streak: profile.lastStudyDate === today ? profile.streak : (profile.streak || 0) + 1, lastStudyDate: today }; setProfile(nextProfile); saveProfile(nextProfile); }} onExit={() => navigate("library")} />}
-          {view === "results" && currentExam && <ResultsSurface exam={currentExam} exams={exams} research={research} onExit={() => navigate("dashboard")} onLibrary={() => navigate("library")} onProgress={() => navigate("progress")} onNeedKey={() => setSettingsOpen(true)} />}
+          {view === "results" && currentExam && <ResultsSurface exam={currentExam} exams={exams} research={research} onExit={() => navigate("dashboard")} onLibrary={() => navigate("library")} onProgress={() => navigate("progress")} onNeedKey={() => setSettingsOpen(true)} onTutor={openTutor} />}
         </div>
       </main>
       {settingsOpen && <SettingsSurface onClose={() => setSettingsOpen(false)} onSaved={() => { setSettingsOpen(false); setToast("Settings and limits saved"); }} />}
+      {searchOpen && <CommandPalette query={searchQuery} inputRef={searchInputRef} results={commandResults} onQuery={setSearchQuery} onClose={() => setSearchOpen(false)} onSelect={runCommand} />}
       {toast && <div className="toast"><Icon name="check" size={16} />{toast}</div>}
     </div>
   );
@@ -169,10 +299,32 @@ function Dashboard({ exams, profile, research, onNew, onDemo, onDaily, onOpen, o
 
 function Metric({ label, value, delta, icon, tone }) { return <div className="metric-card"><div className={`metric-icon ${tone}`}><Icon name={icon} /></div><span>{label}</span><strong>{value}</strong><small>{delta}</small></div>; }
 
-function Generator({ exams, research, onCreated, onResearch, onNeedKey }) {
+function summarizeResearch(research) {
+  if (!research) return "";
+  return `${research.summary}
+Signals: ${research.examSignals.join("; ")}
+Priority topics: ${research.highYieldTopics.map((item) => `${item.subject}: ${item.topic}`).join("; ")}
+Disease watch: ${(research.diseaseWatch || []).map((item) => `${item.disease}: ${item.examAngle}`).join("; ")}`;
+}
+
+function Generator({ exams, questionMemory, research, preset, onPresetConsumed, onCreated, onResearch, onNeedKey }) {
   const [count, setCount] = useState(20); const [difficulty, setDifficulty] = useState("Moderate to high"); const [subjects, setSubjects] = useState(SUBJECTS);
   const [customPrompt, setCustomPrompt] = useState(""); const [useResearch, setUseResearch] = useState(true); const [adaptiveMode, setAdaptiveMode] = useState(getPreferences().adaptiveMode); const [busy, setBusy] = useState(false); const [progress, setProgress] = useState({ done: 0, total: 0, label: "" }); const [error, setError] = useState("");
   const allocation = useMemo(() => allocateSubjects(count, subjects), [count, subjects]);
+
+  useEffect(() => {
+    if (!preset?.id) return;
+    const frame = requestAnimationFrame(() => {
+      if (Number.isFinite(preset.count)) setCount(Math.min(180, Math.max(5, Number(preset.count))));
+      if (preset.difficulty) setDifficulty(preset.difficulty);
+      if (preset.subjects?.length) setSubjects(preset.subjects);
+      if (typeof preset.useResearch === "boolean") setUseResearch(preset.useResearch);
+      if (typeof preset.adaptiveMode === "boolean") setAdaptiveMode(preset.adaptiveMode);
+      if (preset.prompt) setCustomPrompt(preset.prompt);
+      onPresetConsumed?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [onPresetConsumed, preset]);
 
   function toggleSubject(subject) { setSubjects((current) => current.includes(subject) ? (current.length === 1 ? current : current.filter((item) => item !== subject)) : [...current, subject]); }
 
@@ -195,14 +347,26 @@ function Generator({ exams, research, onCreated, onResearch, onNeedKey }) {
         const data = await callApi("/api/research", {}); activeResearch = data.research; saveResearch(activeResearch); onResearch(activeResearch); recordUsage("research", 1);
       }
       const plan = buildBatchPlan(count, subjects, 10); const questions = []; const coveredTopics = []; const adaptiveProfile = adaptiveMode ? adaptivePromptFromExams(exams) : "Adaptive mode disabled; follow the requested subject blueprint without candidate-history weighting.";
+      const seenFingerprints = questionMemory.map((item) => item.fingerprint);
+      const seenNearFingerprints = questionMemory.map((item) => item.nearFingerprint);
+      const seenQuestionSignatures = questionMemory.map((item) => item.signature);
+      const researchBrief = useResearch ? summarizeResearch(activeResearch) : "";
       for (let index = 0; index < plan.length; index += 1) {
         const batch = plan[index]; setProgress({ done: questions.length, total: count, label: `Setting paper · batch ${index + 1} of ${plan.length}` });
         const data = await callApi("/api/generate", {
           ...batch, difficulty, mode: "NEET PG 2026 + AIIMS/INI-CET integrated", customPrompt,
-          researchBrief: activeResearch ? `${activeResearch.summary}\nSignals: ${activeResearch.examSignals.join("; ")}\nPriority topics: ${activeResearch.highYieldTopics.map((t) => `${t.subject}: ${t.topic}`).join("; ")}\nDisease watch: ${(activeResearch.diseaseWatch || []).map((t) => `${t.disease}: ${t.examAngle}`).join("; ")}` : "",
-          coveredTopics, adaptiveProfile, reasoningEffort: count >= 100 ? "medium" : "high"
+          researchBrief,
+          coveredTopics, adaptiveProfile, reasoningEffort: count >= 60 ? "medium" : "high",
+          useWebSearch: false,
+          seenFingerprints,
+          seenNearFingerprints,
+          seenQuestionSignatures
         });
-        questions.push(...data.questions.map((question) => ({ ...question, researchSources: data.sources || [] }))); coveredTopics.push(...data.questions.flatMap((q) => q.sourceTags));
+        questions.push(...data.questions.map((question) => ({ ...question, researchSources: data.sources || [] })));
+        coveredTopics.push(...data.questions.flatMap((q) => q.sourceTags));
+        seenFingerprints.push(...data.questions.map((question) => question.fingerprint).filter(Boolean));
+        seenNearFingerprints.push(...data.questions.map((question) => question.nearFingerprint).filter(Boolean));
+        seenQuestionSignatures.push(...data.questions.map((question) => question.signature).filter(Boolean));
       }
       setProgress({ done: count, total: count, label: "Paper ready" });
       recordUsage("questions", count);
@@ -217,14 +381,14 @@ function Generator({ exams, research, onCreated, onResearch, onNeedKey }) {
       <div className="form-section"><div className="section-number">02</div><div className="form-content"><label>Subject mix</label><p>Weights remain proportional to your grand-test blueprint.</p><div className="subject-chips">{SUBJECTS.map((subject) => <button key={subject} onClick={() => toggleSubject(subject)} className={subjects.includes(subject) ? "active" : ""}><span>{subjects.includes(subject) && <Icon name="check" size={13} />}</span>{subject}</button>)}</div></div></div>
       <div className="form-section"><div className="section-number">03</div><div className="form-content"><label>Challenge level</label><div className="segmented">{["Moderate", "Moderate to high", "Examiner mode"].map((item) => <button key={item} onClick={() => setDifficulty(item)} className={difficulty === item ? "active" : ""}>{item}</button>)}</div></div></div>
       <div className="form-section"><div className="section-number">04</div><div className="form-content"><label htmlFor="prompt">Your emphasis <span>optional</span></label><p>Ask for specific systems, traps, clinical settings or a revision theme.</p><textarea id="prompt" value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} placeholder="e.g. Emphasize cardio–renal integration, ABG interpretation and immediate-vs-definitive management traps…" maxLength={1200} /><small className="char-count">{customPrompt.length}/1200</small></div></div>
-      <label className="research-toggle"><span className={`toggle ${useResearch ? "on" : ""}`} onClick={() => setUseResearch(!useResearch)}><i /></span><span><b>Ground with current research signals</b><small>Refreshes if the saved brief is over 24 hours old. Uses web search and may increase API cost.</small></span><Icon name="radar" /></label>
+      <label className="research-toggle"><span className={`toggle ${useResearch ? "on" : ""}`} onClick={() => setUseResearch(!useResearch)}><i /></span><span><b>Ground with current research signals</b><small>Deep Search runs once, then all paper batches reuse that brief for faster generation.</small></span><Icon name="radar" /></label>
       <label className="research-toggle adaptive-toggle"><span className={`toggle ${adaptiveMode ? "on" : ""}`} onClick={() => setAdaptiveMode(!adaptiveMode)}><i /></span><span><b>Adaptive candidate model</b><small>Uses your prior answers to focus weak subjects, revisit traps and raise difficulty gradually.</small></span><Icon name="brain" /></label>
       <div className="quality-contract"><span>✓</span><div><b>PulseTest-AI quality contract</b><p>Official exam bodies define paper rules · current clinical authority defines answers · ambiguous questions are replaced, never guessed · adaptation remains non-biased.</p></div></div>
       {error && <div className="error-banner">{error}</div>}
       {busy && <div className="generation-progress"><div><span>{progress.label}</span><b>{progress.done}/{progress.total}</b></div><div className="progress-track"><i style={{ width: `${progress.total ? progress.done / progress.total * 100 : 4}%` }} /></div><small>You can safely retry if a batch is rate-limited. Full tests can take several minutes.</small></div>}
       <button className="primary-button generate-button" disabled={busy} onClick={generate}>{busy ? <><span className="spinner" /> Generating paper…</> : <><Icon name="spark" /> Generate {count} questions <Icon name="arrow" /></>}</button>
     </div>
-    <aside className="studio-preview"><div className="preview-card"><span className="overline">LIVE BLUEPRINT</span><h3>Your paper at a glance</h3><div className="paper-ring" style={{ "--progress": `${Math.min(count / 180 * 100, 100) * 3.6}deg` }}><div><strong>{count}</strong><span>questions</span></div></div><dl><div><dt>Format</dt><dd>Single best answer</dd></div><div><dt>Scoring</dt><dd>+4 / −1</dd></div><div><dt>Est. time</dt><dd>{Math.ceil(count * 1.17)} min</dd></div><div><dt>Review</dt><dd>Full reasoning</dd></div></dl></div><div className="allocation-card"><span className="overline">ALLOCATION</span>{allocation.map((item) => <div className="allocation-row" key={item.subject}><span>{item.subject}</span><i><b style={{ width: `${item.count / Math.max(...allocation.map((a) => a.count)) * 100}%` }} /></i><strong>{item.count}</strong></div>)}</div><p className="medical-note">Educational practice only. Generated explanations should be verified against authoritative current guidance before clinical use.</p></aside></div>
+    <aside className="studio-preview"><div className="preview-card"><span className="overline">LIVE BLUEPRINT</span><h3>Your paper at a glance</h3><div className="paper-ring" style={{ "--progress": `${Math.min(count / 180 * 100, 100) * 3.6}deg` }}><div><strong>{count}</strong><span>questions</span></div></div><dl><div><dt>Format</dt><dd>Single best answer</dd></div><div><dt>Scoring</dt><dd>+4 / −1</dd></div><div><dt>Est. time</dt><dd>{Math.ceil(count * 1.17)} min</dd></div><div><dt>Review</dt><dd>Full reasoning</dd></div><div><dt>No-repeat memory</dt><dd>{questionMemory.length || 0} prior questions</dd></div></dl></div><div className="allocation-card"><span className="overline">ALLOCATION</span>{allocation.map((item) => <div className="allocation-row" key={item.subject}><span>{item.subject}</span><i><b style={{ width: `${item.count / Math.max(...allocation.map((a) => a.count)) * 100}%` }} /></i><strong>{item.count}</strong></div>)}</div><p className="medical-note">Educational practice only. Generated explanations should be verified against authoritative current guidance before clinical use.</p></aside></div>
   </section>;
 }
 
@@ -251,24 +415,6 @@ function ExamPlayer({ exam, onSave, onSubmit, onExit }) {
   return <div className="exam-shell"><header className="exam-header"><button className="exam-brand" onClick={onExit}><span className="brand-mark"><span /></span><b>PulseTest-AI</b></button><div className="exam-progress"><div><span>Question {index + 1} of {exam.questions.length}</span><b>{Math.round(answered / exam.questions.length * 100)}% answered</b></div><i><span style={{ width: `${answered / exam.questions.length * 100}%` }} /></i></div><div className="exam-tools"><span className="timer"><Icon name="clock" /> {formatTime(seconds)}</span><button className="secondary-button palette-button" onClick={() => setPalette(!palette)}>Palette</button><button className="primary-button compact" onClick={submit}>Submit test</button></div></header><div className="exam-body"><aside className={`question-palette ${palette ? "show" : ""}`}><div className="palette-head"><div><span className="overline">NAVIGATOR</span><h3>Question palette</h3></div><button className="icon-button palette-close" onClick={() => setPalette(false)}><Icon name="close" /></button></div><div className="palette-grid">{exam.questions.map((item, i) => <button key={item.id} onClick={() => { setIndex(i); setPalette(false); }} className={`${i === index ? "current" : ""} ${answers[item.id] ? "answered" : ""} ${flags.includes(item.id) ? "flagged" : ""}`}>{i + 1}</button>)}</div><div className="palette-legend"><span><i className="answered" />Answered</span><span><i className="current" />Current</span><span><i className="flagged" />Flagged</span></div><div className="attempt-card"><span>{answered}/{exam.questions.length}</span><p><b>Questions answered</b>{exam.questions.length - answered} still open</p></div></aside><main className="question-stage"><div className="question-meta"><div><span className="subject-tag">{question.subject}</span><span>{question.setting}</span><span>{question.difficulty}</span></div><button className={flags.includes(question.id) ? "flag-button active" : "flag-button"} onClick={toggleFlag}><Icon name="flag" size={16} />{flags.includes(question.id) ? "Flagged" : "Flag for review"}</button></div><div className="question-number">QUESTION {String(index + 1).padStart(2, "0")}</div><h2 className="question-stem">{question.stem}</h2><div className="options-list">{question.options.map((option) => <button className={answers[question.id] === option.id ? "selected" : ""} onClick={() => choose(option.id)} key={option.id}><span>{option.id}</span><p>{option.text}</p><i><Icon name="check" size={14} /></i></button>)}</div><div className="question-footer"><button className="secondary-button" disabled={index === 0} onClick={() => setIndex(index - 1)}>← Previous</button><span>Choose the single best answer</span>{index === exam.questions.length - 1 ? <button className="primary-button" onClick={submit}>Finish & submit</button> : <button className="primary-button" onClick={() => setIndex(index + 1)}>Next question <Icon name="arrow" size={15} /></button>}</div></main></div></div>;
 }
 
-function Results({ exam, onExit, onLibrary }) {
-  const [filter, setFilter] = useState("all"); const [open, setOpen] = useState(exam.questions[0]?.id);
-  const result = exam.result; const shown = exam.questions.filter((q) => filter === "all" || (filter === "incorrect" && exam.answers[q.id] && exam.answers[q.id] !== q.correctOptionId) || (filter === "flagged" && exam.flags?.includes(q.id)));
-  const circumference = 2 * Math.PI * 50;
-  return <section className="results-page"><div className="result-hero"><div><span className="overline light-overline">TEST COMPLETE · {formatDate(exam.completedAt)}</span><h1>{result.percentage >= 70 ? "Sharp clinical thinking." : result.percentage >= 50 ? "A strong diagnostic baseline." : "Now the useful part begins."}</h1><p>{exam.title} · {exam.questions.length} questions · {formatTime(exam.elapsedSeconds)}</p><div className="result-actions"><button className="light-button" onClick={() => document.getElementById("review")?.scrollIntoView({ behavior: "smooth" })}>Review reasoning <Icon name="arrow" /></button><button className="text-button light" onClick={onExit}>Back to dashboard</button></div></div><div className="score-orbit"><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" /><circle className="score-line" cx="60" cy="60" r="50" style={{ strokeDasharray: circumference, strokeDashoffset: circumference * (1 - result.percentage / 100) }} /></svg><div><strong>{result.percentage}<small>%</small></strong><span>weighted score</span></div></div></div><div className="result-metrics"><div><span className="result-dot correct" /><p><b>{result.correct}</b>Correct</p><small>+{result.correct * 4} marks</small></div><div><span className="result-dot wrong" /><p><b>{result.incorrect}</b>Incorrect</p><small>−{result.incorrect} marks</small></div><div><span className="result-dot blank" /><p><b>{result.unanswered}</b>Unanswered</p><small>0 marks</small></div><div className="net-score"><span>NET SCORE</span><strong>{result.score}<small> / {result.maxScore}</small></strong></div></div><div className="review-head" id="review"><div><span className="overline">DEEP REVIEW</span><h2>Turn errors into <em>retrieval cues.</em></h2></div><div className="segmented small">{[["all", `All ${exam.questions.length}`], ["incorrect", `Incorrect ${result.incorrect}`], ["flagged", `Flagged ${exam.flags?.length || 0}`]].map(([id, label]) => <button key={id} className={filter === id ? "active" : ""} onClick={() => setFilter(id)}>{label}</button>)}</div></div><div className="review-list">{shown.map((question) => {
-    const answer = exam.answers[question.id]; const isCorrect = answer === question.correctOptionId; const isOpen = open === question.id;
-    return <article className={`review-card ${isCorrect ? "correct" : "wrong"}`} key={question.id}><button className="review-summary" onClick={() => setOpen(isOpen ? null : question.id)}><span className="review-index">{String(question.number).padStart(2, "0")}</span><span className={`review-status ${isCorrect ? "correct" : answer ? "wrong" : "blank"}`}><Icon name={isCorrect ? "check" : "close"} size={14} /></span><span className="review-title"><small>{question.subject} · {question.sourceTags.slice(0, 2).join(" · ")}</small><b>{question.stem}</b></span><span className="your-answer"><small>Your answer</small><b>{answer || "—"} {isCorrect ? "Correct" : answer ? "Incorrect" : "Unanswered"}</b></span><span className={`chevron ${isOpen ? "open" : ""}`}>⌄</span></button>{isOpen && <div className="review-detail"><div className="review-options">{question.options.map((option) => { const chosen = answer === option.id; const right = question.correctOptionId === option.id; const wrongReason = question.whyOthersWrong.find((item) => item.optionId === option.id); return <div className={`${right ? "right" : ""} ${chosen && !right ? "chosen-wrong" : ""}`} key={option.id}><span>{option.id}</span><p><b>{option.text}</b>{right ? question.explanation : wrongReason?.reason}</p>{right && <i>BEST ANSWER</i>}{chosen && !right && <i>YOUR CHOICE</i>}</div>; })}</div><div className="learning-grid"><div className="learn-card trap"><span>⚠</span><p><b>The trap</b>{question.trap}</p></div><div className="learn-card clue"><span>⌁</span><p><b>Decisive clue</b>{question.clue}</p></div><div className="learn-card memory"><span>✦</span><p><b>Memory hook</b>{question.memoryTip}</p></div></div></div>}</article>;
-  })}</div>{!shown.length && <div className="empty-state"><span><Icon name="check" size={30} /></span><h3>Nothing to review here</h3><p>Try another review filter.</p></div>}<div className="results-foot"><button className="secondary-button" onClick={onLibrary}>Open test library</button><button className="primary-button" onClick={onExit}>Finish review</button></div></section>;
-}
-
-function ResearchLab({ research, onResearch, onNeedKey, onGenerate }) {
-  const [busy, setBusy] = useState(false); const [error, setError] = useState("");
-  async function refresh() { setBusy(true); setError(""); try { const key = loadSessionKey(); const response = await fetch("/api/research", { method: "POST", headers: { "Content-Type": "application/json", ...(key ? { "x-openai-key": key } : {}) }, body: "{}" }); const data = await response.json(); if (!response.ok) { const err = new Error(data.error); err.status = response.status; throw err; } onResearch(data.research); } catch (err) { setError(err.message); if (err.status === 401) onNeedKey(); } finally { setBusy(false); } }
-  return <section><div className="page-title"><div><span className="overline">TREND INTELLIGENCE</span><h1>Research before <em>recall.</em></h1><p>Convert current exam signals into a grounded topic map—not copied questions.</p></div><button className="primary-button" disabled={busy} onClick={refresh}>{busy ? <><span className="spinner" /> Researching…</> : <><Icon name="radar" /> {research ? "Refresh brief" : "Run deep research"}</>}</button></div>{error && <div className="error-banner">{error}</div>}{research ? <><div className="research-hero panel"><div className="signal-icon large"><Icon name="radar" size={30} /></div><div><span className="overline">LATEST BRIEF · {formatDate(research.generatedAt)}</span><h2>{research.headline}</h2><p>{research.summary}</p></div><button className="secondary-button" onClick={onGenerate}>Use in generator <Icon name="arrow" size={14} /></button></div><div className="research-grid"><div className="panel"><div className="panel-head"><div><span className="overline">PATTERN SIGNALS</span><h3>What the paper is testing</h3></div></div><ol className="signal-list">{research.examSignals.map((item, index) => <li key={item}><span>{String(index + 1).padStart(2, "0")}</span><p>{item}</p></li>)}</ol></div><div className="panel"><div className="panel-head"><div><span className="overline">GUIDELINE WATCH</span><h3>Volatile clinical areas</h3></div></div><div className="watch-list">{research.guidelineWatch.map((item) => <p key={item}><span>!</span>{item}</p>)}</div></div></div><div className="panel topic-panel"><div className="panel-head"><div><span className="overline">PRIORITY MAP</span><h3>High-yield topic queue</h3></div><span className="tiny-badge">{research.highYieldTopics.length} signals</span></div><div className="topic-table"><div className="table-head"><span>Topic</span><span>Subject</span><span>Priority</span><span>Why now</span></div>{research.highYieldTopics.map((item) => <div className="topic-row" key={`${item.subject}-${item.topic}`}><b>{item.topic}</b><span>{item.subject}</span><i className={item.priority === "Very high" ? "very-high" : ""}>{item.priority}</i><p>{item.rationale}</p></div>)}</div></div><div className="source-panel"><span className="overline">SOURCES CONSULTED</span><div>{research.sources?.map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={source.url}>{source.title} ↗</a>)}</div><p>Trend claims are directional signals, not official weightage. Clinical content should be checked against current authoritative guidance.</p></div></> : <div className="research-empty"><div className="research-rings"><span><Icon name="radar" size={38} /></span></div><span className="overline">NO BRIEF YET</span><h2>Give the generator a current map.</h2><p>The research pass searches exam-body information, educator trend discussions and authoritative guideline sources, then saves a cited brief for 24 hours.</p><button className="primary-button" onClick={refresh}><Icon name="spark" /> Start deep research</button></div>}</section>;
-}
-
-function SettingsModal({ onClose, onSaved }) {
-  const [key, setKey] = useState(loadSessionKey()); const [show, setShow] = useState(false); const [health, setHealth] = useState(null);
-  useEffect(() => { fetch("/api/health").then((r) => r.json()).then(setHealth).catch(() => {}); }, []);
-  return <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className="modal"><div className="modal-head"><div><span className="overline">CONNECTION</span><h2>OpenAI settings</h2></div><button className="icon-button" onClick={onClose}><Icon name="close" /></button></div><div className="key-illustration"><span><Icon name="key" size={25} /></span><div><b>Your key stays session-only</b><p>A key entered here is held in this browser tab and sent only to this app’s server routes. It is never written to localStorage or included in generated test records.</p></div></div><label className="field-label" htmlFor="api-key">OpenAI API key</label><div className="key-input"><input id="api-key" type={show ? "text" : "password"} value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-…" autoComplete="off" /><button onClick={() => setShow(!show)}>{show ? "Hide" : "Show"}</button></div><p className="field-help">Leave blank to use the server’s <code>OPENAI_API_KEY</code>. For deployed multi-user apps, server-side keys are recommended.</p><div className="connection-status"><span className={health?.openaiConfigured ? "online" : ""}><i /> Server key {health?.openaiConfigured ? "configured" : "not configured"}</span><span className={health?.supabaseConfigured ? "online" : ""}><i /> Storage: {health?.supabaseConfigured ? "Supabase" : "private device"}</span></div><div className="modal-actions"><button className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" onClick={() => { saveSessionKey(key); onSaved(); }}>Save session settings</button></div></div></div>;
+function CommandPalette({ query, inputRef, results, onQuery, onClose, onSelect }) {
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="command-modal"><div className="command-bar"><Icon name="search" size={16} /><input ref={inputRef} value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search tests, subjects, research signals or actions…" aria-label="Quick search" autoComplete="off" /><button className="icon-button" onClick={onClose} aria-label="Close quick search"><Icon name="close" /></button></div><div className="command-results">{results.length ? results.map((item) => <button key={item.id} className="command-row" onClick={() => onSelect(item)}><span className="command-icon"><Icon name={item.icon} size={16} /></span><span className="command-copy"><b>{item.title}</b><small>{item.detail}</small></span><span className="command-enter">↵</span></button>) : <div className="command-empty"><b>No matches yet</b><p>Try a subject like Medicine, a page like AI tutor, or a saved paper title.</p></div>}</div><div className="command-hint"><span>Fast search is local and instant.</span><span><kbd>⌘ K</kbd> open · <kbd>Esc</kbd> close</span></div></div></div>;
 }

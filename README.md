@@ -1,27 +1,17 @@
 # PulseTest-AI
 
-PulseTest-AI is a deployable NEET PG / INI-CET clinical reasoning workspace. It generates original single-best-answer papers, hides the answer key until submission, scores with `+4 / -1`, and turns every option into a post-test teaching moment.
+PulseTest-AI is a Next.js NEET PG / INI-CET practice platform that generates scenario-based single-best-answer papers, scores them out of 180, explains every mistake after submission, and adapts the next paper around weak subjects, traps, and high-yield trends.
 
-## What is included
+It is built to feel closer to a LeetCode-style exam workspace than a plain MCQ page:
 
-- Custom tests from 5 to 180 questions, generated in resilient 10-question batches
-- The requested 180-question subject blueprint (60 Medicine, 25 OBGY, 20 Surgery, 15 Pathology, 15 Pharmacology, 10 Microbiology, 10 PSM, 25 integrated)
-- OpenAI Responses API with strict structured outputs
-- Optional web-grounded daily trend research with visible source links
-- Question palette, timer, flags, autosave, negative marking, score dashboard
-- Correct/incorrect option analysis, trap, decisive clue, and memory hook
-- Private local browser storage by default; optional Supabase JSONB sync
-- Session-only bring-your-own API key, plus recommended server-side key support
-- A complete five-question demo requiring no API key
-- LeetCode-style daily clinical case and one-click concept-sibling generation
-- India-focused Deep Search with visible sources, a 20-year pattern lens, confidence-labelled 10-year forecasts, and an emerging-disease watch
-- Adaptive difficulty and subject allocation derived from the candidate’s own answers
-- Day-by-day score charts, subject mastery bars, strong/weak areas, projected correct answers out of 180, and a seven-day repair pathway
-- Local daily API-cost ceilings for generated questions and Deep Search calls
+- custom papers from 5 to 180 questions
+- post-test review with trap, clue, memory tip, and why-the-other-options-are-wrong
+- optional Deep Search research for recent guideline-sensitive and trend-sensitive topics
+- daily case mode, analytics, streaks, and subject-wise repair pathways
+- local-first storage with optional Supabase sync
+- same-origin server routes so OpenAI keys stay out of client code
 
-## Local setup
-
-Use Node.js 24 LTS or newer.
+## Quick Start
 
 ```bash
 pnpm install
@@ -29,69 +19,189 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-Open `http://localhost:3000`. Either put `OPENAI_API_KEY` in `.env.local`, or open Settings in the app and use a session-only key. The browser key is never persisted to localStorage.
+Open [http://localhost:3000](http://localhost:3000).
 
-`OPENAI_MODEL` defaults to `gpt-5.5`. Use a model that supports Responses API structured outputs and web search. Web research has an additional tool cost.
+If you do not want to store a server key locally yet, you can leave `OPENAI_API_KEY` blank and paste a session-only key inside the app from `Settings -> API & generation limits`.
 
-Deep Search uses OpenAI’s Responses API web-search tool with an India location hint. A separate Google API key is not required. The related-question endpoint restricts medical grounding to an authoritative-domain allowlist including WHO, NBEMS, AIIMS, ICMR, NCDC/MoHFW, NMC, national programmes, PubMed and ClinicalTrials.gov.
+## Setup Screens
 
-## Prediction methodology
+![Dashboard preview](./public/readme/dashboard.jpg)
+![Settings preview](./public/readme/settings.jpg)
 
-PulseTest-AI does **not** claim to know future or leaked questions. The research brief explicitly separates:
+## Configuration In One Place
 
-- **Official** — exam-body rules, notices and archives.
-- **Recall signal** — repeated but non-official candidate or educator reports.
-- **Inference** — AI synthesis from curriculum, exam-format and health-system signals.
+Local development uses `.env.local`. Production deployments use your platform's environment variable manager, for example Vercel Environment Variables.
 
-The “20-year lens” can include the AIPGMEE/AIIMS era, NEET-PG from its 2012 launch and the later INI-CET era where evidence is available. Complete recent official papers are generally unavailable, so the app forecasts topic families and reasoning formats with Low/Medium/High confidence instead of pretending to predict exact questions.
+PulseTest-AI already includes [.env.example](./.env.example) as the single source of truth for setup.
 
-## Question quality and non-bias contract
+### Required vs optional
 
-- Official NBEMS/NBE and AIIMS examination sources are the only authority for exam format, marking, dates, notices and paper rules.
-- Coaching discussions and recalls may suggest a topic pattern but never determine a medical answer or official weightage.
-- Each generated question includes hidden `evidenceLevel`, `timeSensitivity` and `answerCheck` metadata. The server also rejects duplicate options, invalid keys, inconsistent distractor analysis, incomplete scenarios and insufficient explanations.
-- When credible current guidance conflicts or two options remain defensible, the model is instructed to discard that candidate and generate a replacement. It must never knowingly guess a key.
-- Emerging-disease scenarios must come from verified surveillance or authoritative guidance and test stable patient-facing decisions. Recency alone cannot inflate weightage.
-- The prompt prohibits demographic and geographic stereotypes. Candidate adaptation changes practice allocation and difficulty—not scientific truth, answer keys or scoring.
+| Variable | Required | Where it belongs | What it does |
+| --- | --- | --- | --- |
+| `OPENAI_API_KEY` | Yes for shared/server generation | Server only | Authenticates generation, related-question, and research routes |
+| `OPENAI_MODEL` | Recommended | Server only | Model id used by OpenAI Responses API |
+| `OPENAI_REASONING_EFFORT` | Optional | Server only | Speed/quality tradeoff for question generation |
+| `OPENAI_RESEARCH_REASONING_EFFORT` | Optional | Server only | Speed/quality tradeoff for daily research |
+| `OPENAI_SEARCH_CONTEXT_SIZE` | Optional | Server only | Web-search depth for question generation and related questions |
+| `OPENAI_RESEARCH_CONTEXT_SIZE` | Optional | Server only | Web-search depth for the daily research brief |
+| `NEXT_PUBLIC_APP_URL` | Optional | Public | Base URL shown in health/config output |
+| `NEXT_PUBLIC_SUPABASE_URL` | Optional | Public | Supabase project URL for optional sync |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Optional | Public | Browser-safe Supabase anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Optional | Server only | Saves research snapshots to Supabase |
+| `CRON_SECRET` | Optional | Server only | Protects the daily research cron endpoint |
 
-## Adaptive loop
+### Safe key handling
 
-After every submitted paper, `lib/analytics.js` recalculates subject accuracy, repeated missed tags, recent score movement, projected correct answers out of 180 and a readiness indicator. The next adaptive paper uses that compact profile to allocate approximately 60% to weak areas, 25% to spaced retrieval of previous errors and 15% to stronger areas at a higher challenge level. Raw personal medical data is neither requested nor used.
+- Never place real secrets inside `NEXT_PUBLIC_*` variables.
+- `OPENAI_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `CRON_SECRET` must stay server-side.
+- A key entered in the PulseTest-AI settings modal is stored only in `sessionStorage`, never in `localStorage`.
+- The browser sends that session key only to this app's own API routes through same-origin requests.
+- Generated questions, reports, and Supabase records do not store the OpenAI key.
 
-## Supabase (optional)
+## Runtime URL Map
+
+| Use | Local URL | Notes |
+| --- | --- | --- |
+| App UI | `http://localhost:3000` | Main dashboard and test workspace |
+| Health/config check | `http://localhost:3000/api/health` | Safe config summary, no secrets returned |
+| Question generation | `POST /api/generate` | Generates 1 to 10 questions per batch |
+| Related question | `POST /api/related` | Builds one concept-sibling question with web grounding |
+| Research brief | `GET/POST /api/research` | Loads or refreshes the current Deep Search brief |
+| Cron refresh | `GET /api/cron/daily-research` | Requires `Authorization: Bearer <CRON_SECRET>` |
+
+## Recommended `.env.local`
+
+```bash
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+OPENAI_API_KEY=your_server_side_key_here
+OPENAI_MODEL=gpt-5.5
+OPENAI_REASONING_EFFORT=medium
+OPENAI_RESEARCH_REASONING_EFFORT=medium
+OPENAI_SEARCH_CONTEXT_SIZE=medium
+OPENAI_RESEARCH_CONTEXT_SIZE=medium
+
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+
+CRON_SECRET=change-this-before-production
+```
+
+Set `OPENAI_MODEL` explicitly for the model available on your OpenAI account. PulseTest-AI uses the Responses API with JSON schema outputs and web search, so choose a model supported for that workflow in your environment.
+
+## Fast Configuration
+
+If you want the app to feel fast rather than heavy, keep these defaults:
+
+- `OPENAI_REASONING_EFFORT=medium`
+- `OPENAI_RESEARCH_REASONING_EFFORT=medium`
+- `OPENAI_SEARCH_CONTEXT_SIZE=medium`
+- `OPENAI_RESEARCH_CONTEXT_SIZE=medium`
+
+Extra ways to reduce latency:
+
+- turn off Deep Search for routine practice sets
+- generate 20 to 60 questions for everyday study, then reserve 180-question runs for grand tests
+- keep the OpenAI key on the server in local dev or Vercel instead of re-entering it repeatedly
+- add Supabase only when you need sync, not for the first local run
+
+## Optional Supabase Setup
 
 1. Create a Supabase project.
-2. Run [`supabase/schema.sql`](supabase/schema.sql) in the SQL editor.
-3. Enable **Anonymous Sign-Ins** under Authentication → Providers.
-4. Add the Supabase URL and anon key to `.env.local`.
-5. Add the service-role key only to the server environment if daily research snapshots should be saved.
+2. Run [supabase/schema.sql](./supabase/schema.sql) in the SQL editor.
+3. Enable anonymous sign-in.
+4. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+5. Add `SUPABASE_SERVICE_ROLE_KEY` only if you want server-side research snapshots.
 
-The included row-level security policy binds each record to its authenticated anonymous user. Add a durable login before promising multi-device sync; generated educational content should never be used to store patient information.
+Without Supabase, PulseTest-AI still works fully in local-first mode using browser storage plus in-memory research caching.
 
-## Deploy to Vercel
+## Deploying To Vercel
 
 1. Import the repository into Vercel.
 2. Add `OPENAI_API_KEY`, `OPENAI_MODEL`, and `CRON_SECRET`.
-3. Optionally add the three Supabase variables from `.env.example`.
-4. Deploy. `vercel.json` schedules one daily research refresh at 06:00 IST.
+3. Optionally add the Supabase variables.
+4. Deploy.
 
-If your Vercel plan has a shorter function limit, keep the browser-driven research refresh and remove the cron; question generation already uses one request per 10-question batch.
+The included [vercel.json](./vercel.json) schedules the daily research refresh. If you do not want scheduled research, simply omit `CRON_SECRET` and the protected cron route will stay inactive.
 
-## Data model and safety
+## Architecture
 
-Only generated paper content, answers, attempt state, and research briefs are stored. No patient data is requested. This is an educational product—not a clinical decision-support tool—and guideline-sensitive explanations should be verified against current authoritative sources.
+```mermaid
+flowchart LR
+    A["Candidate in browser"] --> B["Next.js UI"]
+    B --> C["Same-origin API routes"]
+    B --> D["Local storage + session storage"]
+    C --> E["OpenAI Responses API"]
+    E --> F["Web search tool"]
+    C --> G["Optional Supabase sync"]
+    G --> H["Exam history + research snapshots"]
+```
 
-## Project structure
+### How it works
+
+1. The browser UI collects paper settings, answer choices, and local study preferences.
+2. The app sends generation and research requests to its own Next.js API routes.
+3. Those server routes call OpenAI with structured JSON schema outputs.
+4. Generated questions are validated before the paper is accepted.
+5. Results are stored locally first and optionally mirrored to Supabase.
+6. After submission, PulseTest-AI computes subject performance, weak points, streaks, and a repair pathway.
+
+## Project Structure
 
 ```text
-app/api/generate          batched structured question generation
-app/api/related           web-grounded conceptual sibling question
-app/api/research          historical, forecast and disease intelligence
-app/api/cron              protected daily research refresh
-components                dashboard, exam, report card and analytics UI
-lib/analytics.js          adaptive learner model and study pathway
-lib/prompts.js            paper-setter, research and sibling prompts
-lib/question-schema.js    strict OpenAI response contracts
-lib/client-store.js       local-first persistence, limits and Supabase sync
-supabase/schema.sql       authenticated JSONB storage with RLS
+app/
+  api/
+    cron/daily-research   protected daily research refresh
+    generate              batched question generation
+    health                safe runtime/config summary
+    related               concept-sibling question generation
+    research              Deep Search brief retrieval + refresh
+components/
+  RecallLab.jsx           main app shell and navigation
+  SettingsPanel.jsx       key handling, limits, and runtime hints
+  ResultsReport.jsx       scorecard and answer review
+  ProgressLab.jsx         progress charts and weak/strong subject views
+  ResearchIntelligence.jsx trend and forecast presentation
+lib/
+  runtime-config.js       one place for env/config parsing
+  openai-server.js        OpenAI client creation and error handling
+  research-server.js      research refresh and source extraction
+  question-quality.js     answer consistency and batch validation
+  analytics.js            adaptive study logic and repair pathway
+  client-store.js         local-first persistence and optional Supabase sync
+supabase/
+  schema.sql              exam + research tables with RLS
 ```
+
+## Hidden-Secret Design
+
+PulseTest-AI is designed so API keys do not need to appear in client code:
+
+- the browser talks only to `/api/*` routes on the same origin
+- the server route adds the OpenAI secret when a server key is configured
+- browser users may temporarily override with a session key, but that key never becomes part of the built bundle
+- `/api/health` exposes only safe status metadata such as whether a server key is configured, which model id is selected, and whether Supabase sync is enabled
+
+## Quality Rules
+
+- official exam-body notices define paper rules and notices
+- current authoritative medical guidance defines the answer logic
+- duplicate or ambiguous answer sets are rejected server-side
+- related-question search is restricted to an authoritative domain allowlist
+- forecasting is confidence-labelled trend analysis, not leaked-question prediction
+
+## Development Commands
+
+```bash
+pnpm dev
+pnpm lint
+pnpm test
+pnpm build
+```
+
+## Notes
+
+- This is an educational product, not a clinical decision-support system.
+- Generated explanations should still be checked against current authoritative medical guidance when the topic is guideline-sensitive.
+- Do not store patient information inside this app.
