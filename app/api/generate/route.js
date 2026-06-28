@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { openAIFromRequest, modelName, safeApiError } from "@/lib/openai-server";
 import { expandQuestionBatchPayload, questionBatchSchema } from "@/lib/question-schema";
 import { buildQuestionInstructions, buildQuestionPrompt } from "@/lib/prompts";
-import { validateQuestionBatch } from "@/lib/question-quality";
+import { questionIssue } from "@/lib/question-quality";
 import { extractSources } from "@/lib/research-server";
 import { openAIConfig, resolveReasoningEffort } from "@/lib/runtime-config";
 import { dedupeQuestions } from "@/lib/question-dedup";
@@ -81,24 +81,40 @@ export async function POST(request) {
       if (response.status === "incomplete") throw new Error("The verified question batch was incomplete. Please retry this batch.");
       try {
         const data = expandQuestionBatchPayload(JSON.parse(response.output_text));
-        const verified = validateQuestionBatch(data.questions, remaining);
-        const deduped = dedupeQuestions(verified, {
-          fingerprints: [...seenFingerprints, ...accepted.map((question) => question.fingerprint)],
-          nearFingerprints: [...seenNearFingerprints, ...accepted.map((question) => question.nearFingerprint)]
-        });
-
-        if (!deduped.accepted.length) {
-          lastQualityIssue = "All proposed questions were duplicates or near-duplicates.";
-          retryFeedback = retryFeedbackFromError(new Error(lastQualityIssue));
-          continue;
+        const currentIssues = [];
+        const currentQuestions = Array.isArray(data.questions) ? data.questions : [];
+        if (currentQuestions.length !== remaining) {
+          currentIssues.push(`Expected ${remaining} validated questions but received ${currentQuestions.length}.`);
         }
-        retryFeedback = deduped.rejected.length ? "Keep the remaining questions more distinct from previous stems, especially patient profile, setting, and decisive hinge." : "";
-        for (const question of deduped.accepted) {
-          seenFingerprints.add(question.fingerprint);
-          seenNearFingerprints.add(question.nearFingerprint);
+        let acceptedCount = 0;
+        for (const [index, question] of currentQuestions.entries()) {
+          if (accepted.length + acceptedCount >= count) break;
+          const issue = questionIssue(question, index);
+          if (issue) {
+            currentIssues.push(issue);
+            continue;
+          }
+          const deduped = dedupeQuestions([question], {
+            fingerprints: [...seenFingerprints, ...accepted.map((item) => item.fingerprint)],
+            nearFingerprints: [...seenNearFingerprints, ...accepted.map((item) => item.nearFingerprint)]
+          });
+          if (!deduped.accepted.length) {
+            currentIssues.push(`Question ${index + 1} was duplicate or near-duplicate. Change the patient profile, setting, or decision hinge.`);
+            continue;
+          }
+          const [nextQuestion] = deduped.accepted;
+          seenFingerprints.add(nextQuestion.fingerprint);
+          seenNearFingerprints.add(nextQuestion.nearFingerprint);
+          accepted.push(nextQuestion);
+          acceptedCount += 1;
+          if (useWebSearch) sources.push(...extractSources(response.output));
         }
-        accepted.push(...deduped.accepted);
-        if (useWebSearch) sources.push(...extractSources(response.output));
+        if (currentIssues.length) {
+          lastQualityIssue = currentIssues[0];
+          retryFeedback = `${retryFeedbackFromError(new Error(currentIssues[0]))} Fill the remaining questions with distinct items.`;
+        } else {
+          retryFeedback = "";
+        }
       } catch (error) {
         if (error instanceof SyntaxError || error?.status === 422) {
           lastQualityIssue = String(error.message || "Generation quality check failed.");

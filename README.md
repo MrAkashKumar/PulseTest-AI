@@ -303,9 +303,17 @@ Without Supabase, PulseTest-AI still works fully in local-first mode using brows
 ## Deploying To Vercel
 
 1. Import the repository into Vercel.
-2. Add `OPENAI_API_KEY`, `OPENAI_MODEL`, and `CRON_SECRET`.
-3. Optionally add the Supabase variables.
-4. Deploy.
+2. Add server-only env vars in the Vercel dashboard: `OPENAI_API_KEY`, `OPENAI_MODEL`, `CRON_SECRET`, and optionally `SUPABASE_SERVICE_ROLE_KEY`.
+3. Add public env vars only when you need them: `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+4. Never create a `NEXT_PUBLIC_OPENAI_API_KEY`; the app does not use one.
+5. Deploy.
+
+Safe deployment checklist:
+
+- keep `OPENAI_API_KEY` and `SUPABASE_SERVICE_ROLE_KEY` out of the client bundle
+- use the browser session key only for local testing if you want a temporary per-tab key
+- store generated papers locally first, then let Supabase sync happen as an optional background step
+- if you change env vars on Vercel, redeploy so the server routes pick them up cleanly
 
 The included [vercel.json](./vercel.json) schedules the daily research refresh. If you do not want scheduled research, simply omit `CRON_SECRET` and the protected cron route will stay inactive.
 

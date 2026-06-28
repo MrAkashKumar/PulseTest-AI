@@ -3,7 +3,7 @@ import test from "node:test";
 import { allocateSubjects, buildBatchPlan } from "../lib/constants.js";
 import { demoExam } from "../lib/demo-exam.js";
 import { adaptivePromptFromExams, analyzePerformance, examSubjectBreakdown } from "../lib/analytics.js";
-import { validateQuestionBatch } from "../lib/question-quality.js";
+import { questionIssue, validateQuestionBatch } from "../lib/question-quality.js";
 import { dedupeQuestions, questionIdentity } from "../lib/question-dedup.js";
 import { buildQuestionArchive, summarizeQuestionArchive } from "../lib/question-history.js";
 import { certificateForResult } from "../lib/certification.js";
@@ -147,4 +147,35 @@ test("compact question payload expands back into the app question shape", () => 
   assert.equal(expanded.questions[0].options[1].id, "B");
   assert.equal(expanded.questions[0].whyOthersWrong[0].optionId, "A");
   assert.equal(expanded.questions[0].answerCheck.includes("uniquely correct"), true);
+});
+
+test("question issue helper flags missing sex or pregnancy context directly", () => {
+  const issue = questionIssue({
+    subject: "PSM",
+    integratedSubjects: ["Epidemiology"],
+    setting: "OPD",
+    difficulty: "Moderate",
+    stem: "A community screening study evaluates a diagnostic test in 200 adults with cough and fever attending a district clinic after a brief outbreak investigation, and the examiner asks which performance metric is valid for the sample design.",
+    options: [
+      { id: "A", text: "Option one for the test" },
+      { id: "B", text: "Option two for the test" },
+      { id: "C", text: "Option three for the test" },
+      { id: "D", text: "Option four for the test" }
+    ],
+    correctOptionId: "A",
+    explanation: "Explanation text that is long enough to be meaningful and useful for learners, and it clearly shows why the best answer is the unique choice in this stem.",
+    whyOthersWrong: [
+      { optionId: "B", reason: "Reason B explains a tempting but ultimately incorrect interpretation of the result." },
+      { optionId: "C", reason: "Reason C explains the second tempting but incorrect interpretation of the result." },
+      { optionId: "D", reason: "Reason D explains the third tempting but incorrect interpretation of the result." }
+    ],
+    trap: "Trap text that is sufficiently long and explains why the tempting choice is misleading in this PSM-style stem.",
+    clue: "Clue text that is sufficiently long and points to the deciding detail in the stem.",
+    memoryTip: "Memory tip text that is sufficiently long.",
+    sourceTags: ["diagnostic test", "PSM"],
+    evidenceLevel: "Established standard",
+    timeSensitivity: "Stable",
+    answerCheck: "Answer audit text that confirms the keyed option is uniquely correct after checking the specific population, stem wording, and decision boundary."
+  }, 4);
+  assert.match(issue, /must state patient sex or pregnancy context/);
 });
